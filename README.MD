@@ -634,15 +634,18 @@ Honest framing for the project's own "Current State" line below: this makes AEGI
 
 ---
 
-## Sprint 27
+## Sprint 27 — Completed
 
 ### Learning
 
-Learn from execution history.
+- ✅ Every executed action's outcome is now recorded as an `Experience` (`ExperienceRecorder`, wired into `DefaultMissionEngine`) — SUCCESS if it ran without throwing, ERROR if it didn't — alongside the existing per-iteration resilience handling (a thrown action still becomes a HIGH `Finding` and the mission keeps going either way).
+- ✅ `PatternAnalyzer` groups those experiences by action identity and computes a per-action success rate; `LearningEngine` turns that into a confidence adjustment in `[-0.20, +0.20]` (≥90% success → `+0.20`, ≥75% → `+0.10`, ≥50% → `0.00`, ≥25% → `-0.10`, below → `-0.20`).
+- ✅ `HeuristicCandidateConfidenceEstimator` applies that adjustment on top of its static heuristic score, so a `(type, target)` that's been failing gets deprioritized and one that's been succeeding gets a boost — without hand-writing a rule for why.
+- 🐛 Fixed a bug found during review before this was verifiable at all: `Action` is a record whose `equals()`/`hashCode()` include a random `UUID id` and `Instant createdAt`, both freshly generated every time a candidate is regenerated. Grouping or keying by the raw `Action` (what `PatternAnalyzer` and `LearningResult` originally did) meant no two "same logical action" instances from different iterations were ever considered equal — every group had exactly one member, so `successRate` was always 0.0 or 1.0 and the whole pipeline was silently a no-op. Fixed via `ActionKey.of(action) = type + "|" + target`, the same stable-identity convention `ExecutionMemory` already used for the same reason.
 
-Increase confidence for successful actions.
+Verified live: ran an actual saucedemo.com login mission end-to-end. All 3 executed actions (type username, type password, click login) were recorded as SUCCESS experiences with real measured durations, and `learn()` correctly returned `+0.20` for each afterward (100% success rate bucket). 12 new unit tests cover the fixed grouping, the adjustment-bucket math, and the estimator's clamping — full suite is 88/88 passing (was 76/76).
 
-Reduce confidence for failing actions.
+Scoped like `WorldModel`/`VisitedStateMemory`: the experience repository is in-memory, per mission run. Learning doesn't carry over between separate mission runs yet — that would be real (cross-run) persistence, which is a distinct follow-up, not something this sprint claims.
 
 ---
 
@@ -679,6 +682,139 @@ Discover Defects
 
 Generate Report
 ```
+
+---
+
+## Sprint 29 — Completed
+
+### Coverage-Aware Exploration
+
+- 🐛 Found and fixed a real bug during review: `KnownDeadEndCandidateFilter` was permanently unreachable dead code. `AlreadyExecutedCandidateFilter` blocked any candidate whose `(type, target)` had *ever* been executed, mission-wide, with no notion of which state it was tried from. `WorldModel` only has destination data for actions that have already been executed. So by construction, nothing that reached `KnownDeadEndCandidateFilter` could ever have the "known destination" it checks for — the dead-end check had never fired, in any mission, ever.
+- ✅ Fixed by scoping `ExecutionMemory` per state (`StateSignature`) instead of globally — an exact repeat of the same action from the same state is still blocked (that's what actually prevents pointless looping), but a locator genuinely present on more than one page (a persistent nav link, say) can now be reconsidered once reached from a state it hasn't been tried from yet.
+- ✅ Changed `WorldModel.knownDestinationsOf` to look up by action identity (type + target) across *every* recorded source state, not just "from this exact state" — so a candidate reached from a new state gets judged against everywhere that locator has led before, not just its own (necessarily empty) history. A candidate is now pruned only if every known destination it's ever led to is a state we've already visited; any unvisited destination, or no history at all, leaves it alone.
+- ✅ 11 new/updated unit tests (`ExecutionMemoryTest`, `AlreadyExecutedCandidateFilterTest`, `WorldModelTest`, `KnownDeadEndCandidateFilterTest`) — including one that specifically reproduces the fixed scenario: a nav link proven to dead-end from page A gets pruned when offered again from page B, despite never having been tried from B itself. Full suite: 99/99 passing.
+
+Verified live: a 10-iteration saucedemo.com run with no early goal (so it couldn't just stop at the first page) ran clean through several state revisits — including one genuine element-timeout mid-run, correctly recorded as an ERROR experience with a resulting `-0.20` learning adjustment, mission continuing afterward rather than crashing.
+
+### Exploration Metrics
+
+- ✅ New `ExplorationCoverage` (distinct interactive elements discovered across the whole mission vs. distinct elements actually the target of an executed action, as a percentage), computed once in `MissionReportData` and surfaced in both report formats — a line in the text report, a tile in the HTML report.
+- Deliberately narrow: this is elements-on-pages-actually-visited coverage, not site-wide page coverage (that's Phase 5's "Page coverage," a different, harder metric needing a sitemap or DOM diffing this project doesn't have).
+- 4 new unit tests (`MissionReportDataTest`). Full suite: 103/103 passing.
+
+Verified live against saucedemo.com: the real generated report showed `Exploration Coverage: 3/32 discovered interactive elements exercised (9%)` after a 3-step login, and the HTML report's stats tile matched.
+
+### State Prioritization
+
+- ✅ New `CoverageAwareActionScorer`, opt-in via `explorationStrategy: coverage-aware` — the scoring counterpart to `KnownDeadEndCandidateFilter`'s fix above. Uses the exact same `WorldModel.knownDestinationsOf` evidence, but as a reward instead of a cut: a candidate confirmed, from history at any prior state, to lead somewhere not yet visited gets a fixed `+0.15` bonus over its plain heuristic confidence.
+- Deliberately two-tier, not a full "rank by how unexplored" score: a candidate whose *every* known destination is already visited never reaches a scorer at all — the filter prunes those first — so there's only "confirmed still worth trying" vs. "no evidence either way" to rank between.
+- 4 new unit tests (`CoverageAwareActionScorerTest`). Full suite: 107/107 passing. Verified live against saucedemo.com with no crashes.
+
+### Automatic Dynamic Strategy Switching
+
+- ✅ New `AdaptiveActionScorer`, opt-in via `explorationStrategy: adaptive`. A wrapper, not a new standalone strategy — it delegates to `greedy` normally and to `coverage-aware` once exploration looks stuck (no newly discovered state in the last 3 iterations), switching back the moment a new state turns up again.
+- "Stuck" is recomputed fresh from `MissionContext`'s own observation history on every call — no separate flag or reset logic needed, it just falls out of re-checking the trailing window each time.
+- 4 new unit tests (`AdaptiveActionScorerTest`), including one that specifically proves the switch-back-once-unstuck behavior. Full suite: 111/111 passing.
+
+Verified live against saucedemo.com — ran clean with no crashes. That particular run never actually got stuck (each iteration hit a new page quickly), so it stayed on `greedy` the whole time, which is the correct behavior, not a gap in coverage — the switching logic itself is what the unit tests pin down deterministically, independent of whether any one live run happens to trigger it.
+
+This closes out every goal Phase 4 – Exploration Intelligence originally listed. Remaining honest limitation: the 3-iteration stuck threshold is a fixed constant, not tuned or configurable per mission.
+
+---
+
+## Sprint 30 — Completed
+
+### Phase 3 – Adaptive Decision Making
+
+Audited Phase 3's five goals against what actually exists: historical success scoring, confidence adjustment, and failure penalty were already delivered by Phase 2's Learning Framework (Sprint 27) — that's what `PatternAnalyzer`'s success rate and `LearningEngine`'s bucketed `[-0.20, +0.20]` adjustment already are. Adaptive exploration follows for free from that same wiring: since the adjustment is applied in `HeuristicCandidateConfidenceEstimator`, upstream of every `ActionScorer`, *every* strategy adapts to learned history automatically — not just a dedicated "adaptive" one.
+
+That left exactly one real gap:
+
+- ✅ **Exploration bonus**: a candidate with zero recorded `Experience` — genuinely never tried, not just landed in the neutral 50-75% success-rate bucket — now gets a flat `+0.05` confidence bonus. New `LearningResult.hasExperience(type, target)` distinguishes "no data at all" from an explicit `0.0` adjustment, since `adjustmentFor()`'s `getOrDefault(..., 0.0)` collapses both cases to the same number otherwise.
+- This is deliberately a different signal from Phase 4's `CoverageAwareActionScorer`: that one rewards a candidate *confirmed* (via WorldModel history) to lead somewhere unvisited; this one rewards a candidate we simply have *no information about yet*, at the confidence-estimation layer rather than the scoring layer, so it applies uniformly across every strategy rather than being opt-in to one.
+- 7 new/updated unit tests (`LearningResultTest`, and `HeuristicCandidateConfidenceEstimatorTest` updated — its old "no adjustment" test conflated "never tried" with "tried and neutral," which the new `hasExperience` check now correctly tells apart). Full suite: 116/116 passing.
+
+Verified live against saucedemo.com: the real generated report showed `(learning-adjusted +0.05, never tried yet this mission)` on every step, since nothing has any history on a fresh mission run.
+
+This completes Phase 3 – Adaptive Decision Making.
+
+---
+
+## Sprint 31 — Completed
+
+### Phase 5 – Coverage Intelligence
+
+- ✅ **Page coverage**: new `PageCoverage` — the same discovered-vs-interacted element math as Phase 4's `ExplorationCoverage`, broken down per page URL instead of blended mission-wide. Surfaced as a table in the text report and a table with progress bars in the HTML report. Still elements-on-a-visited-page coverage, not a claim about the whole site — a true "% of the site visited" metric stays impossible without a sitemap or crawl, which this project deliberately doesn't have.
+- ✅ **DOM coverage**: reframed rather than rebuilt — this is exactly what `ExplorationCoverage`/`PageCoverage` already measure, in the only sense achievable here (interactive elements the Observer actually saw vs. exercised). Elements that never render at all (behind an unopened modal or tab) are invisible to AEGIS and can't be measured — a permanent architectural boundary, not a gap.
+- ✅ **Heat maps**: the HTML report's SVG navigation graph now visually encodes revisit frequency. Node radius and fill-opacity scale with how many times a state was observed (new `MissionReportData.stateVisitCounts`); edge stroke-width scales with how many times that exact transition was traversed, collapsing repeats into one thicker line instead of several overlapping near-duplicate arcs (the old behavior). A hover tooltip and an inline "(×N)" edge label spell out the raw number too, not just the visual.
+- 2 new unit tests. Full suite: 118/118 passing.
+
+Verified live against saucedemo.com: real report showed a per-page breakdown (`https://www.saucedemo.com/ 3/3 (100%)`, `.../inventory.html 5/29 (17%)`, `.../cart.html 2/12 (17%)`), and a state visited 5 times rendered at radius 42.0/opacity 0.40 in the actual SVG output versus the base 26.0/no-heat for a single visit — the live numbers match the formula exactly.
+
+This completes Phase 5 – Coverage Intelligence, with the shared honest caveat from Phase 4: nothing here can measure coverage against the whole site, only against what AEGIS has actually observed.
+
+---
+
+## Sprint 32 — Completed
+
+### Phase 6 – Bug Intelligence
+
+- ✅ **Bug clustering / Duplicate detection**: new `com.aegis.core.bug` package. `BugFingerprint.of(finding)` normalizes a Finding's message — collapsing embedded digits, UUIDs, and URLs — into a coarser identity than exact-string equality, so "add-to-cart failed for item 4" and "...for item 7" recognize as the same underlying bug. `DefaultBugClusterAnalyzer` groups a mission's Findings by that fingerprint into `BugCluster`s. This sits *above* the existing `BrowserSignalAnomalyDetector` exact-signature dedup (untouched, still a Stable Component) — that layer already collapses byte-identical repeats to one Finding; this layer clusters what's left over.
+- ✅ **Severity prediction**: a cluster's severity is the worst severity among its members, escalated one level (never past CRITICAL) once it's recurred 3+ times — a problem that keeps happening is worse than any single occurrence's own rating.
+- ✅ **Root cause grouping**: a cluster spanning more than one distinct page URL is flagged as likely sharing a root cause. Deliberately hedged in the actual wording ("may share a root cause") — this is a co-occurrence heuristic, not causal analysis.
+- Purely a report-layer addition (computed in `MissionReportData.from()`, same shape as Phase 4/5's coverage metrics) — no changes to the live mission loop or any other Stable Component. Surfaced as a new "Bug Clusters" section in both report formats, above the existing flat findings list.
+- 14 new unit tests (`BugFingerprintTest`, `DefaultBugClusterAnalyzerTest`, one `MissionReportDataTest` addition). Full suite: 132/132 passing.
+
+Verified live against saucedemo.com: a genuine Playwright `TimeoutError` mid-run correctly rendered as a single-occurrence HIGH-severity cluster in both real report formats.
+
+This completes Phase 6 – Bug Intelligence. Honest limitation: fingerprinting is regex normalization, not semantic understanding — findings that differ only in wording, with no embedded digit/UUID/URL to normalize away, still fingerprint separately even where a human reader would call them the same bug.
+
+---
+
+## Sprint 33 — Partially Completed
+
+### Phase 8 – AI Intelligence: Bug Explanation
+
+- ✅ New `BugExplainer` interface, two implementations: `RuleBasedBugExplainer` (default — just the existing fixed-per-signal-type sentence) and `LlmBugExplainer` (opt-in — asks a real model to write a short triage note for a Phase 6 `BugCluster`, same provider-agnostic client and fallback-on-any-failure discipline as `LlmActionScorer` from Sprint 26).
+- ✅ Explanations are computed once per cluster inside `MissionReportData.from(...)` itself, not lazily per report format — generating both the text and HTML report from the same mission data never calls the model twice for the same bug.
+- ✅ Opt-in via a new `AEGIS_LLM_BUG_EXPLANATIONS=enabled` environment variable, not a mission parameter — same reasoning as the rest of `AEGIS_LLM_*` config: mission parameters get serialized into every report.
+- 6 new unit tests (`RuleBasedBugExplainerTest`, `LlmBugExplainerTest`, two `MissionReportDataTest` additions). Full suite: 138/138 passing.
+
+Verified live end-to-end against a fake OpenAI-compatible server (no real LLM provider reachable in this sandbox — same verification method Sprint 26's `LlmActionScorer` integration used): a real saucedemo.com run produced two genuine bug clusters, each independently triggered its own model call, and the model's response text showed up correctly in both real generated report formats.
+
+### Phase 8 – AI Intelligence: Recommendation Engine
+
+- ✅ New `RecommendationEngine` interface, same two-implementation shape as bug explanation: `RuleBasedRecommendationEngine` (default — points at the single highest-severity `BugCluster`, e.g. "3 issue(s) found. Highest priority: [CRITICAL] ... (occurred 2 times).") and `LlmRecommendationEngine` (opt-in — looks across *all* of a mission's bug clusters at once, not one at a time like `LlmBugExplainer`, and writes a short prioritized recommendation).
+- ✅ Skips the model call entirely when there are no bug clusters — nothing to prioritize, so nothing to ask about.
+- ✅ Its own opt-in, `AEGIS_LLM_RECOMMENDATIONS=enabled`, independent of `AEGIS_LLM_BUG_EXPLANATIONS` — a mission run can want one AI feature without the other.
+- ✅ Surfaced prominently in both report formats, directly under the outcome summary — the "so what do I do" a reader wants before the raw findings list, not buried after it.
+- 8 new unit tests (`RuleBasedRecommendationEngineTest`, `LlmRecommendationEngineTest`, three `MissionReportDataTest` additions). Full suite: 146/146 passing.
+
+Verified live end-to-end with an upgraded fake server that inspects the request body to tell a bug-explanation prompt apart from a recommendation prompt and returns a distinct canned response for each — confirming the two AI features make genuinely independent model calls rather than one being silently reused for the other. Both `AI-GENERATED-EXPLANATION:...` and `AI-GENERATED-RECOMMENDATION:...` showed up correctly, in the right places, in the same real report.
+
+### Phase 8 – AI Intelligence: Natural Language Missions
+
+- ✅ New `MissionParser` interface: `RuleBasedMissionParser` (default — a bare URL regex against the raw instruction, the one thing mechanically extractable without understanding the sentence; goal/success-condition/credentials left unset, since there's no honest rule-based way to infer those from arbitrary prose) and `LlmMissionParser` (opt-in — asks a model to extract `baseUrl`, `goal`, `successUrlContains`, `username`, and `password` as JSON from a free-text QA instruction).
+- ✅ The model's `baseUrl` is never trusted blindly: validated as a real `http(s)` URL with an actual host before use. An invalid or missing URL falls back exactly like a network failure or malformed JSON would — same discipline as validating an `LlmActionScorer` candidate index before trusting it.
+- ✅ New `NaturalLanguageMissionMain` launcher entry point — every other `*Main` class builds a `Mission` by hand; this one starts from a plain-English instruction string and lets the parser do it.
+- 12 new unit tests (`RuleBasedMissionParserTest`, `LlmMissionParserTest`). Full suite: 158/158 passing.
+
+Verified live twice, both through the real mission engine, not just the parser in isolation:
+1. **No reachable LLM server** — correctly fell back to bare-URL extraction, produced a runnable `Mission` with just `baseUrl` set, and the real mission ran its full 10 iterations and failed cleanly (no credentials extracted, so the generic fallback login values didn't match) — degraded, not broken.
+2. **Fake server returning a complete extraction** — produced a `Mission` with the correct `baseUrl`, `successUrlContains`, `username`, and `password` all pulled from the instruction text, and the resulting mission genuinely logged into saucedemo.com and reached `SUCCESS`.
+
+### Phase 8 – AI Intelligence: AI Mission Planning
+
+- ✅ New `MissionPlanner` interface: `RuleBasedMissionPlanner` (default — a mechanical plan derived from which mission parameters are set, e.g. "there's a baseUrl, so navigate there") and `LlmMissionPlanner` (opt-in — asks a model to sketch 3-6 short ordered high-level steps from the mission's name/description/parameters).
+- ✅ Scoped narrow on purpose, given this is nominally the riskiest of the four AI features: the plan is generated *before* the mission runs and is **purely advisory** — nothing in the live reasoning pipeline (`GoalReasoner`, `ActionScorer`, `CandidateFilter`) ever reads it. A bad or nonsensical plan step is a display-quality problem, never something that gets executed against a real page — unlike `LlmActionScorer`'s candidate index or `LlmMissionParser`'s `baseUrl`, both of which *do* feed into execution and need strict validation. This is what makes "AI mission planning" safe to ship without the invention-of-invalid-actions risk that made it the deferred, "bigger" goal in the first place.
+- ✅ Threaded through as already-computed data, not a strategy invoked internally like `BugExplainer`/`RecommendationEngine` — the plan has to exist *before* the `MissionContext` a report is normally derived from is even created, so `MissionReportData`'s 5-arg `from(...)` overload just takes a finished `MissionPlan`.
+- ✅ Its own opt-in, `AEGIS_LLM_MISSION_PLANNING=enabled`, independent of the other three AI features.
+- ✅ Surfaced as a new "Mission Plan" section in both report formats, right after the summary — the intended approach, before the detailed results.
+- 12 new unit tests (`RuleBasedMissionPlannerTest`, `LlmMissionPlannerTest`, two `MissionReportDataTest` additions). Full suite: 170/170 passing.
+
+Verified live end-to-end against a fake server: the AI-generated plan appeared correctly in both the console output and the real report — and, critically, the mission still ran on its real, independently-configured credentials and reached `SUCCESS`, confirming the plan genuinely never influences what the tester actually does.
+
+**This completes Phase 8 – AI Intelligence.** Four AI capabilities now exist across the pipeline: `LlmActionScorer` (picks among validated candidates), `LlmBugExplainer`/`LlmRecommendationEngine` (write prose about data they're handed), `LlmMissionParser` (extracts structured fields from a description), and `LlmMissionPlanner` (previews an approach, advisory only). None of them generate or execute an action the deterministic pipeline hasn't already validated — that boundary held across all four.
 
 ---
 

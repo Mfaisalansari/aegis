@@ -7,6 +7,7 @@ import com.aegis.core.executor.Executor;
 import com.aegis.core.goal.GoalEvaluator;
 import com.aegis.core.observer.Observer;
 import com.aegis.core.planner.Planner;
+import com.aegis.core.reasoning.experience.ExperienceRecorder;
 import com.aegis.core.reasoning.memory.ExecutionMemory;
 import com.aegis.core.world.WorldModel;
 import com.aegis.model.action.Action;
@@ -55,7 +56,8 @@ class DefaultMissionEngineTest {
                 new ExecutionMemory(),
                 neverReachesGoal(),
                 noAnomalies(),
-                new WorldModel()
+                new WorldModel(),
+                noOpExperienceRecorder()
         );
 
         MissionResult result = engine.execute(mission());
@@ -84,7 +86,8 @@ class DefaultMissionEngineTest {
                 new ExecutionMemory(),
                 neverReachesGoal(),
                 noAnomalies(),
-                new WorldModel()
+                new WorldModel(),
+                noOpExperienceRecorder()
         );
 
         MissionResult result = engine.execute(mission());
@@ -124,6 +127,10 @@ class DefaultMissionEngineTest {
 
     private Executor noOpExecutor() {
         return (action, context) -> { };
+    }
+
+    private ExperienceRecorder noOpExperienceRecorder() {
+        return (missionContext, observation, candidateAction, outcome, duration) -> { };
     }
 
     private Browser noOpBrowser() {

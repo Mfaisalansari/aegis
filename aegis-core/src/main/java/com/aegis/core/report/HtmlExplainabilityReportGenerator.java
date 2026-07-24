@@ -1,5 +1,12 @@
 package com.aegis.core.report;
 
+import com.aegis.core.bug.BugCluster;
+import com.aegis.core.bug.BugExplainer;
+import com.aegis.core.bug.RecommendationEngine;
+import com.aegis.core.bug.RuleBasedBugExplainer;
+import com.aegis.core.bug.RuleBasedRecommendationEngine;
+import com.aegis.core.mission.MissionPlan;
+import com.aegis.core.mission.RuleBasedMissionPlanner;
 import com.aegis.model.finding.Finding;
 import com.aegis.model.mission.MissionStatus;
 import com.aegis.model.reasoning.CandidateAction;
@@ -11,6 +18,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Renders a mission's explainability data as a single self-contained HTML
@@ -21,8 +29,27 @@ import java.util.Map;
 public class HtmlExplainabilityReportGenerator {
 
     public String generate(MissionContext context, MissionStatus status) {
+        return generate(context, status, new RuleBasedBugExplainer());
+    }
 
-        MissionReportData data = MissionReportData.from(context, status);
+    /** Same report, but with AI bug explanations (Phase 8) computed via the given BugExplainer. */
+    public String generate(MissionContext context, MissionStatus status, BugExplainer explainer) {
+        return generate(context, status, explainer, new RuleBasedRecommendationEngine());
+    }
+
+    /** Same report, with AI recommendations (Phase 8) also computed via the given RecommendationEngine. */
+    public String generate(
+            MissionContext context, MissionStatus status, BugExplainer explainer, RecommendationEngine recommender) {
+        return generate(context, status, explainer, recommender,
+                new RuleBasedMissionPlanner().plan(context.getMission()));
+    }
+
+    /** Same report, with an AI mission plan (Phase 8) generated before the mission ran. */
+    public String generate(
+            MissionContext context, MissionStatus status, BugExplainer explainer,
+            RecommendationEngine recommender, MissionPlan plan) {
+
+        MissionReportData data = MissionReportData.from(context, status, explainer, recommender, plan);
 
         StringBuilder html = new StringBuilder();
 
@@ -33,8 +60,11 @@ public class HtmlExplainabilityReportGenerator {
 
         html.append(renderHeader(data));
         html.append(renderSummary(data));
+        html.append(renderPlan(data));
         html.append(renderStats(data));
         html.append(renderGraph(data));
+        html.append(renderPageCoverage(data));
+        html.append(renderBugClusters(data));
         html.append(renderFindings(data));
         html.append(renderSteps(data));
 
@@ -63,7 +93,30 @@ public class HtmlExplainabilityReportGenerator {
         return "<section class=\"summary\">"
                 + "<p class=\"goal\"><strong>Goal:</strong> " + escape(data.missionGoal()) + "</p>"
                 + "<p class=\"outcome\">" + escape(data.outcomeSummary()) + "</p>"
+                + "<p class=\"recommendation\"><strong>Recommendation:</strong> "
+                + escape(data.recommendation()) + "</p>"
                 + "</section>";
+    }
+
+    /**
+     * Advisory only (Phase 8 "AI mission planning") — generated before the
+     * mission ran, from the mission's own description/parameters, never
+     * read by the live reasoning pipeline. Shown right after the summary
+     * so a reader sees the intended approach before the detailed results.
+     */
+    private String renderPlan(MissionReportData data) {
+
+        StringBuilder section = new StringBuilder("<section><h2>Mission Plan</h2>"
+                + "<p class=\"caption\">Advisory only — generated before the run, never read by the live "
+                + "decision-making pipeline.</p><ol class=\"plan\">");
+
+        for (String step : data.plan().steps()) {
+            section.append("<li>").append(escape(step)).append("</li>");
+        }
+
+        section.append("</ol></section>");
+
+        return section.toString();
     }
 
     private String renderStats(MissionReportData data) {
@@ -78,6 +131,9 @@ public class HtmlExplainabilityReportGenerator {
         tiles.append(tile("States Discovered", String.valueOf(data.states().size())));
         tiles.append(tile("Transitions", String.valueOf(data.edges().size())));
         tiles.append(tile("Reasoning Steps", String.valueOf(data.reasoningSteps().size())));
+        tiles.append(tile("Element Coverage",
+                data.coverage().elementsInteracted() + "/" + data.coverage().elementsDiscovered()
+                        + " (" + String.format("%.0f%%", data.coverage().coveragePercent()) + ")"));
         tiles.append(tile("Findings", data.findings().size()
                 + (critical + high > 0 ? " (" + (critical + high) + " critical/high)" : "")));
         tiles.append("</section>");
@@ -92,7 +148,9 @@ public class HtmlExplainabilityReportGenerator {
 
     private String renderGraph(MissionReportData data) {
 
-        StringBuilder section = new StringBuilder("<section><h2>World Model</h2>");
+        StringBuilder section = new StringBuilder("<section><h2>World Model</h2>"
+                + "<p class=\"caption\">Node size/fill and edge thickness reflect how many times "
+                + "exploration passed through that state or transition (Phase 5 heat map).</p>");
 
         List<String> states = data.states();
 
@@ -104,19 +162,33 @@ public class HtmlExplainabilityReportGenerator {
         Map<String, double[]> positions = new LinkedHashMap<>();
         double cx = 340;
         double cy = 320;
-        double radius = Math.max(140, 34.0 * states.size());
+        double layoutRadius = Math.max(140, 34.0 * states.size());
 
         for (int i = 0; i < states.size(); i++) {
             double angle = 2 * Math.PI * i / states.size() - Math.PI / 2;
             positions.put(states.get(i), new double[]{
-                    cx + radius * Math.cos(angle),
-                    cy + radius * Math.sin(angle)
+                    cx + layoutRadius * Math.cos(angle),
+                    cy + layoutRadius * Math.sin(angle)
             });
         }
 
+        Map<String, Double> nodeRadii = new LinkedHashMap<>();
+
+        for (String state : states) {
+            nodeRadii.put(state, nodeRadius(data.stateVisitCounts().getOrDefault(state, 1L)));
+        }
+
+        // Heat by exact transition (type + target, not just from/to): two
+        // different actions between the same pair of states get their own
+        // curve; the SAME action repeated multiple times collapses into
+        // one thicker line instead of several overlapping near-duplicate
+        // arcs, which is what "heat" should look like rather than clutter.
+        Map<NavigationEdge, Long> edgeFrequency = data.edges().stream()
+                .collect(Collectors.groupingBy(edge -> edge, LinkedHashMap::new, Collectors.counting()));
+
         Map<String, List<NavigationEdge>> grouped = new LinkedHashMap<>();
 
-        for (NavigationEdge edge : data.edges()) {
+        for (NavigationEdge edge : edgeFrequency.keySet()) {
             grouped.computeIfAbsent(edge.fromState() + " " + edge.toState(), key -> new ArrayList<>())
                     .add(edge);
         }
@@ -129,20 +201,24 @@ public class HtmlExplainabilityReportGenerator {
         // The previous viewBox was a fixed guess (cy * 2 tall) that ignored
         // how far the node radius grows with the state count, so once there
         // were more than a handful of states the graph rendered far outside
-        // its own viewBox and looked clipped/distorted.
+        // its own viewBox and looked clipped/distorted. Per-node radius
+        // (instead of a flat 26) now varies with visit count, so bounds
+        // must be measured against each node's actual radius too.
         double[] bounds = {Double.MAX_VALUE, Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE};
 
-        for (double[] pos : positions.values()) {
-            extend(bounds, pos[0] - 26, pos[1] - 26);
-            extend(bounds, pos[0] + 26, pos[1] + 26);
+        for (Map.Entry<String, double[]> entry : positions.entrySet()) {
+            double r = nodeRadii.get(entry.getKey());
+            extend(bounds, entry.getValue()[0] - r, entry.getValue()[1] - r);
+            extend(bounds, entry.getValue()[0] + r, entry.getValue()[1] + r);
         }
 
         for (List<NavigationEdge> group : grouped.values()) {
             for (int i = 0; i < group.size(); i++) {
 
-                double[][] geometry = edgeGeometry(group.get(i), positions, i);
+                NavigationEdge edge = group.get(i);
+                double[][] geometry = edgeGeometry(edge, positions, nodeRadii, i);
 
-                edgesSvg.append(renderEdge(group.get(i), geometry));
+                edgesSvg.append(renderEdge(edge, geometry, edgeFrequency.get(edge)));
 
                 for (double[] point : geometry) {
                     extend(bounds, point[0], point[1]);
@@ -170,12 +246,25 @@ public class HtmlExplainabilityReportGenerator {
         int index = 1;
 
         for (String state : states) {
-            section.append(renderNode(state, positions.get(state), index++));
+            long visits = data.stateVisitCounts().getOrDefault(state, 1L);
+            section.append(renderNode(state, positions.get(state), nodeRadii.get(state), visits, index++));
         }
 
         section.append("</svg></section>");
 
         return section.toString();
+    }
+
+    private double nodeRadius(long visits) {
+        return 26 + Math.min(16, 4.0 * Math.max(0, visits - 1));
+    }
+
+    private double nodeHeatOpacity(long visits) {
+        return Math.min(0.55, 0.10 * Math.max(0, visits - 1));
+    }
+
+    private double edgeStrokeWidth(long frequency) {
+        return 1.5 + Math.min(4.5, 1.2 * Math.max(0, frequency - 1));
     }
 
     private void extend(double[] bounds, double x, double y) {
@@ -190,19 +279,21 @@ public class HtmlExplainabilityReportGenerator {
      * labelAnchor] — used both to draw the path (renderEdge) and to bound
      * the SVG viewBox (renderGraph), so the two can never drift out of sync.
      */
-    private double[][] edgeGeometry(NavigationEdge edge, Map<String, double[]> positions, int parallelIndex) {
+    private double[][] edgeGeometry(
+            NavigationEdge edge, Map<String, double[]> positions, Map<String, Double> radii, int parallelIndex) {
 
         double[] from = positions.get(edge.fromState());
         double[] to = positions.get(edge.toState());
+        double fromRadius = radii.get(edge.fromState());
 
         if (edge.fromState().equals(edge.toState())) {
 
             double loopOffset = 40 + parallelIndex * 18;
 
-            double[] start = {from[0], from[1] - 26};
+            double[] start = {from[0], from[1] - fromRadius};
             double[] ctrl1 = {from[0] - loopOffset, from[1] - loopOffset};
             double[] ctrl2 = {from[0] + loopOffset, from[1] - loopOffset};
-            double[] label = {from[0], from[1] - 26 - loopOffset};
+            double[] label = {from[0], from[1] - fromRadius - loopOffset};
 
             return new double[][]{start, ctrl1, ctrl2, label};
         }
@@ -214,23 +305,28 @@ public class HtmlExplainabilityReportGenerator {
         return new double[][]{{from[0], from[1]}, {midX, midY}, {to[0], to[1]}};
     }
 
-    private String renderNode(String state, double[] pos, int index) {
+    private String renderNode(String state, double[] pos, double radius, long visits, int index) {
 
-        String shortLabel = shortStateLabel(state, index);
+        double heatOpacity = nodeHeatOpacity(visits);
 
         return String.format(
                 "<g class=\"node\" data-state=\"%s\">"
-                        + "<circle cx=\"%.1f\" cy=\"%.1f\" r=\"26\"/>"
+                        + "<circle cx=\"%.1f\" cy=\"%.1f\" r=\"%.1f\" "
+                        + "style=\"fill: var(--accent); fill-opacity: %.2f\"/>"
                         + "<text x=\"%.1f\" y=\"%.1f\">S%d</text>"
-                        + "<title>%s</title>"
+                        + "<title>%s (visited %d time%s)</title>"
                         + "</g>",
-                escapeAttr(state), pos[0], pos[1], pos[0], pos[1] + 5, index, escape(state)
+                escapeAttr(state), pos[0], pos[1], radius, heatOpacity,
+                pos[0], pos[1] + 5, index, escape(state), visits, visits == 1 ? "" : "s"
         );
     }
 
-    private String renderEdge(NavigationEdge edge, double[][] geometry) {
+    private String renderEdge(NavigationEdge edge, double[][] geometry, long frequency) {
 
-        String label = escape(edge.actionType() + " " + shortenTarget(edge.actionTarget()));
+        String label = escape(edge.actionType() + " " + shortenTarget(edge.actionTarget()))
+                + (frequency > 1 ? " (×" + frequency + ")" : "");
+
+        double strokeWidth = edgeStrokeWidth(frequency);
 
         if (edge.fromState().equals(edge.toState())) {
 
@@ -246,7 +342,9 @@ public class HtmlExplainabilityReportGenerator {
 
             return "<g class=\"edge\" data-from=\"" + escapeAttr(edge.fromState())
                     + "\" data-to=\"" + escapeAttr(edge.toState()) + "\">"
-                    + "<path d=\"" + path + "\" class=\"edge-line self-loop\" marker-end=\"url(#arrow)\"/>"
+                    + "<path d=\"" + path + "\" class=\"edge-line self-loop\" "
+                    + "style=\"stroke-width: " + String.format("%.1f", strokeWidth) + "\" "
+                    + "marker-end=\"url(#arrow)\"/>"
                     + "<text x=\"" + labelPos[0] + "\" y=\"" + labelPos[1] + "\">" + label + "</text>"
                     + "</g>";
         }
@@ -262,13 +360,71 @@ public class HtmlExplainabilityReportGenerator {
 
         return "<g class=\"edge\" data-from=\"" + escapeAttr(edge.fromState())
                 + "\" data-to=\"" + escapeAttr(edge.toState()) + "\">"
-                + "<path d=\"" + path + "\" class=\"edge-line\" marker-end=\"url(#arrow)\"/>"
+                + "<path d=\"" + path + "\" class=\"edge-line\" "
+                + "style=\"stroke-width: " + String.format("%.1f", strokeWidth) + "\" "
+                + "marker-end=\"url(#arrow)\"/>"
                 + "<text x=\"" + mid[0] + "\" y=\"" + mid[1] + "\">" + label + "</text>"
                 + "</g>";
     }
 
-    private String shortStateLabel(String state, int index) {
-        return "S" + index;
+    private String renderPageCoverage(MissionReportData data) {
+
+        StringBuilder section = new StringBuilder("<section><h2>Page Coverage</h2>");
+
+        if (data.pageCoverage().isEmpty()) {
+            section.append("<p class=\"empty\">No pages observed.</p></section>");
+            return section.toString();
+        }
+
+        section.append("<table><thead><tr><th>Page</th><th>Elements Covered</th><th></th></tr></thead><tbody>");
+
+        for (PageCoverage page : data.pageCoverage()) {
+
+            section.append("<tr><td>").append(escape(page.url())).append("</td>")
+                    .append("<td>").append(page.elementsInteracted()).append("/")
+                    .append(page.elementsDiscovered()).append("</td>")
+                    .append("<td><div class=\"bar\"><div class=\"bar-fill\" style=\"width:")
+                    .append((int) page.coveragePercent()).append("%\"></div></div> ")
+                    .append(String.format("%.0f%%", page.coveragePercent())).append("</td>")
+                    .append("</tr>");
+        }
+
+        section.append("</tbody></table></section>");
+
+        return section.toString();
+    }
+
+    private String renderBugClusters(MissionReportData data) {
+
+        StringBuilder section = new StringBuilder("<section><h2>Bug Clusters</h2>"
+                + "<p class=\"caption\">Findings grouped by a normalized fingerprint (Phase 6) — "
+                + "recurring or cross-page clusters are stronger signals than any single occurrence.</p>");
+
+        if (data.bugClusters().isEmpty()) {
+            section.append("<p class=\"empty\">No findings to cluster.</p></section>");
+            return section.toString();
+        }
+
+        for (BugCluster cluster : data.bugClusters()) {
+
+            section.append("<div class=\"finding ").append(cluster.severity().name().toLowerCase()).append("\">")
+                    .append("<span class=\"severity\">").append(cluster.severity()).append("</span> ")
+                    .append("<span class=\"summary\">").append(escape(cluster.representativeSummary())).append("</span>")
+                    .append("<div class=\"meaning\">").append(escape(data.explanationFor(cluster))).append("</div>");
+
+            section.append("<div class=\"meta\">×").append(cluster.occurrenceCount());
+
+            if (cluster.spansMultiplePages()) {
+                section.append(" — seen on ").append(cluster.urls().size())
+                        .append(" different pages, may share a root cause");
+            }
+
+            section.append("</div></div>");
+        }
+
+        section.append("</section>");
+
+        return section.toString();
     }
 
     private String shortenTarget(String target) {
@@ -376,13 +532,17 @@ public class HtmlExplainabilityReportGenerator {
                 .summary { background: var(--card); border: 1px solid var(--border); border-radius: .5rem;
                     padding: 1rem 1.25rem; }
                 .summary .goal { margin: 0 0 .4rem; }
-                .summary .outcome { margin: 0; color: var(--muted); }
+                .summary .outcome { margin: 0 0 .4rem; color: var(--muted); }
+                .summary .recommendation { margin: .6rem 0 0; padding-top: .6rem; border-top: 1px solid var(--border); }
                 .stats { display: flex; flex-wrap: wrap; gap: .75rem; }
                 .tile { background: var(--card); border: 1px solid var(--border); border-radius: .5rem;
                     padding: .75rem 1rem; min-width: 120px; }
                 .tile-value { font-size: 1.3rem; font-weight: 700; }
                 .tile-label { font-size: .8rem; color: var(--muted); }
                 .empty { color: var(--muted); font-style: italic; }
+                .caption { color: var(--muted); font-size: .8rem; margin: -.5rem 0 .75rem; }
+                .plan { padding-left: 1.25rem; }
+                .plan li { margin-bottom: .3rem; }
                 .graph { width: 100%; max-width: 900px; height: auto; overflow: visible; }
                 .node circle { fill: var(--card); stroke: var(--accent); stroke-width: 2; }
                 .node text { fill: var(--fg); font-size: 13px; text-anchor: middle; }

@@ -2,14 +2,15 @@ package com.aegis.core.world;
 
 import com.aegis.core.reasoning.memory.StateSignature;
 import com.aegis.model.action.Action;
+import com.aegis.model.action.ActionType;
 import com.aegis.model.observation.Observation;
 import com.aegis.model.reasoning.NavigationEdge;
 
 import java.util.LinkedHashSet;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 /**
  * A navigation graph built incrementally as the mission runs: which
@@ -49,16 +50,22 @@ public class WorldModel {
     }
 
     /**
-     * Where this exact action, taken from this exact state, led last
-     * time it was tried — empty if it's never been tried from here.
+     * Every destination this exact action (by type + target) has ever
+     * led to, from any state it's been tried from this mission — not
+     * just the current one. The same locator (a persistent nav link, an
+     * "About" button in a shared header) tends to behave the same way
+     * regardless of which page it's clicked from, so history from one
+     * state is meaningful evidence for a candidate reached via a
+     * different, not-yet-tried-from state. Empty if this action has
+     * never been tried from anywhere yet.
      */
-    public Optional<String> knownDestinationOf(Observation from, Action action) {
+    public Set<String> knownDestinationsOf(ActionType type, String target) {
 
-        return edgesFrom(from).stream()
-                .filter(edge -> edge.actionType() == action.type()
-                        && edge.actionTarget().equals(action.target()))
+        return edgesByState.values().stream()
+                .flatMap(Set::stream)
+                .filter(edge -> edge.actionType() == type && edge.actionTarget().equals(target))
                 .map(NavigationEdge::toState)
-                .findFirst();
+                .collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
     public int stateCount() {

@@ -31,6 +31,10 @@ import com.aegis.core.reasoning.GoalReasoner;
 import com.aegis.core.reasoning.RuleBasedGoalReasoner;
 import com.aegis.core.reasoning.confidence.CandidateConfidenceEstimator;
 import com.aegis.core.reasoning.confidence.HeuristicCandidateConfidenceEstimator;
+import com.aegis.core.reasoning.experience.DefaultExperienceRecorder;
+import com.aegis.core.reasoning.experience.ExperienceRecorder;
+import com.aegis.core.reasoning.experience.ExperienceRepository;
+import com.aegis.core.reasoning.experience.InMemoryExperienceRepository;
 import com.aegis.core.reasoning.factory.ActionFactory;
 import com.aegis.core.reasoning.factory.DefaultActionFactory;
 import com.aegis.core.reasoning.filter.AlreadyExecutedCandidateFilter;
@@ -44,13 +48,19 @@ import com.aegis.core.reasoning.generator.DoubleClickCandidateActionGenerator;
 import com.aegis.core.reasoning.generator.GenericCandidateActionGenerator;
 import com.aegis.core.reasoning.generator.PageLevelCandidateActionGenerator;
 import com.aegis.core.reasoning.generator.RaceClickCandidateActionGenerator;
+import com.aegis.core.reasoning.learning.DefaultLearningEngine;
+import com.aegis.core.reasoning.learning.DefaultPatternAnalyzer;
+import com.aegis.core.reasoning.learning.LearningEngine;
+import com.aegis.core.reasoning.learning.PatternAnalyzer;
 import com.aegis.core.reasoning.mapper.DefaultElementActionMapper;
 import com.aegis.core.reasoning.mapper.ElementActionMapper;
 import com.aegis.core.reasoning.memory.ExecutionMemory;
 import com.aegis.core.reasoning.memory.VisitedStateMemory;
 import com.aegis.core.reasoning.scorer.ActionScorer;
 import com.aegis.core.reasoning.scorer.ActionScorerRegistry;
+import com.aegis.core.reasoning.scorer.AdaptiveActionScorer;
 import com.aegis.core.reasoning.scorer.BreadthFirstActionScorer;
+import com.aegis.core.reasoning.scorer.CoverageAwareActionScorer;
 import com.aegis.core.reasoning.scorer.DepthFirstActionScorer;
 import com.aegis.core.reasoning.scorer.FormFirstActionScorer;
 import com.aegis.core.reasoning.scorer.HighestConfidenceActionScorer;
@@ -128,8 +138,34 @@ public final class EngineFactory {
         InputValueResolverRegistry valueResolverRegistry =
                 new InputValueResolverRegistry(inputStrategies);
 
+        /*
+         * Learning Framework (Phase 2)
+         *
+         * In-run only, same as VisitedStateMemory/WorldModel above: every
+         * executed action's outcome is recorded as an Experience, grouped
+         * by stable (type, target) identity (see ActionKey), and turned
+         * into a per-action confidence adjustment that
+         * HeuristicCandidateConfidenceEstimator applies on top of its
+         * static heuristics. DefaultMissionEngine records into it via
+         * experienceRecorder; the estimator reads back out of it via
+         * learningEngine — both share this one repository instance so
+         * within a single mission run, later iterations benefit from
+         * earlier ones.
+         */
+        ExperienceRepository experienceRepository =
+                new InMemoryExperienceRepository();
+
+        PatternAnalyzer patternAnalyzer =
+                new DefaultPatternAnalyzer();
+
+        LearningEngine learningEngine =
+                new DefaultLearningEngine(experienceRepository, patternAnalyzer);
+
+        ExperienceRecorder experienceRecorder =
+                new DefaultExperienceRecorder(experienceRepository);
+
         CandidateConfidenceEstimator confidenceEstimator =
-                new HeuristicCandidateConfidenceEstimator();
+                new HeuristicCandidateConfidenceEstimator(learningEngine);
 
         /*
          * Page-level candidates (REFRESH, BACK) aren't tied to any
@@ -180,21 +216,41 @@ public final class EngineFactory {
          * making them graph-aware using the World Model above is a
          * follow-up, not bundled into this one.
          *
+         * "coverage-aware" is graph-aware, unlike the four proxies above:
+         * it prefers a candidate WorldModel history confirms leads
+         * somewhere not yet visited (State Prioritization, Phase 4). A
+         * candidate whose every known destination is already visited
+         * never reaches it — KnownDeadEndCandidateFilter prunes those
+         * first — so this only ever ranks "confirmed new" above "no
+         * evidence either way", never below.
+         *
          * "llm" is the first strategy backed by a real model instead of a
          * hand-written rule — see LlmActionScorer. Points at a local
          * server (Ollama-shaped defaults) unless AEGIS_LLM_* env vars
          * say otherwise, so trying it costs nothing but doesn't silently
          * call out to a paid API either.
+         *
+         * "adaptive" is the one strategy that switches mid-mission on its
+         * own: it uses "greedy" normally, but falls back to
+         * "coverage-aware" once 3 iterations have passed with no newly
+         * discovered state (see AdaptiveActionScorer) — and switches back
+         * the moment a new state turns up again. This is the Phase 4
+         * "automatic dynamic strategy switching" goal; every other
+         * strategy here is a fixed, manually-chosen-per-mission choice.
          */
-        Map<String, ActionScorer> strategies = Map.of(
-                "greedy", new HighestConfidenceActionScorer(),
-                "random", new RandomActionScorer(),
-                "risk-based", new RiskBasedActionScorer(),
-                "breadth-first", new BreadthFirstActionScorer(),
-                "depth-first", new DepthFirstActionScorer(),
-                "form-first", new FormFirstActionScorer(),
-                "navigation-first", new NavigationFirstActionScorer(),
-                "llm", new LlmActionScorer(OpenAiCompatibleChatClient.fromEnvironment())
+        Map<String, ActionScorer> strategies = Map.ofEntries(
+                Map.entry("greedy", new HighestConfidenceActionScorer()),
+                Map.entry("random", new RandomActionScorer()),
+                Map.entry("risk-based", new RiskBasedActionScorer()),
+                Map.entry("breadth-first", new BreadthFirstActionScorer()),
+                Map.entry("depth-first", new DepthFirstActionScorer()),
+                Map.entry("form-first", new FormFirstActionScorer()),
+                Map.entry("navigation-first", new NavigationFirstActionScorer()),
+                Map.entry("coverage-aware", new CoverageAwareActionScorer(worldModel, visitedStateMemory)),
+                Map.entry("llm", new LlmActionScorer(OpenAiCompatibleChatClient.fromEnvironment())),
+                Map.entry("adaptive", new AdaptiveActionScorer(
+                        new HighestConfidenceActionScorer(),
+                        new CoverageAwareActionScorer(worldModel, visitedStateMemory)))
         );
 
         ActionScorerRegistry scorerRegistry =
@@ -272,7 +328,8 @@ public final class EngineFactory {
                 memory,
                 goalEvaluator,
                 anomalyDetector,
-                worldModel
+                worldModel,
+                experienceRecorder
         );
     }
 }

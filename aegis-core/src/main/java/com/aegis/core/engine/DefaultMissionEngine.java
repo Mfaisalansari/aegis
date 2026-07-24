@@ -7,21 +7,26 @@ import com.aegis.core.executor.Executor;
 import com.aegis.core.goal.GoalEvaluator;
 import com.aegis.core.observer.Observer;
 import com.aegis.core.planner.Planner;
+import com.aegis.core.reasoning.experience.ExperienceRecorder;
 import com.aegis.core.reasoning.memory.ExecutionMemory;
+import com.aegis.core.reasoning.memory.StateSignature;
 import com.aegis.core.world.WorldModel;
 import com.aegis.model.action.Action;
 import com.aegis.model.action.ActionType;
 import com.aegis.model.context.ExecutionState;
 import com.aegis.model.context.MissionContext;
+import com.aegis.model.experience.ExperienceOutcome;
 import com.aegis.model.finding.Finding;
 import com.aegis.model.finding.FindingSeverity;
 import com.aegis.model.mission.Mission;
 import com.aegis.model.mission.MissionResult;
 import com.aegis.model.mission.MissionStatus;
 import com.aegis.model.observation.Observation;
+import com.aegis.model.reasoning.CandidateAction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -39,6 +44,7 @@ public class DefaultMissionEngine implements MissionEngine {
     private final GoalEvaluator goalEvaluator;
     private final AnomalyDetector anomalyDetector;
     private final WorldModel worldModel;
+    private final ExperienceRecorder experienceRecorder;
 
     public DefaultMissionEngine(
             Browser browser,
@@ -49,7 +55,8 @@ public class DefaultMissionEngine implements MissionEngine {
             ExecutionMemory memory,
             GoalEvaluator goalEvaluator,
             AnomalyDetector anomalyDetector,
-            WorldModel worldModel) {
+            WorldModel worldModel,
+            ExperienceRecorder experienceRecorder) {
 
         this.browser = browser;
         this.observer = observer;
@@ -60,6 +67,7 @@ public class DefaultMissionEngine implements MissionEngine {
         this.goalEvaluator = goalEvaluator;
         this.anomalyDetector = anomalyDetector;
         this.worldModel = worldModel;
+        this.experienceRecorder = experienceRecorder;
     }
 
     @Override
@@ -134,11 +142,45 @@ public class DefaultMissionEngine implements MissionEngine {
                     // Record the action
                     state.addAction(action);
 
-                    // Execute the action
-                    executor.execute(action, context);
+                    // Execute the action, recording what happened as an
+                    // Experience for the learning pipeline (Phase 2) — this
+                    // is about THIS specific action's own outcome, separate
+                    // from the broader per-iteration resilience below. On
+                    // failure, record ERROR and rethrow so the existing
+                    // outer catch's Finding-recording/iteration-advancing
+                    // behavior runs exactly as before.
+                    Instant executionStart = Instant.now();
+                    CandidateAction executedCandidate =
+                            new CandidateAction(action, action.confidence(), action.reasoning());
+
+                    try {
+
+                        executor.execute(action, context);
+
+                        experienceRecorder.record(
+                                context,
+                                currentObservation,
+                                executedCandidate,
+                                ExperienceOutcome.SUCCESS,
+                                Duration.between(executionStart, Instant.now())
+                        );
+
+                    } catch (Exception e) {
+
+                        experienceRecorder.record(
+                                context,
+                                currentObservation,
+                                executedCandidate,
+                                ExperienceOutcome.ERROR,
+                                Duration.between(executionStart, Instant.now())
+                        );
+
+                        throw e;
+                    }
 
                     // Remember the action so it is not re-selected next iteration
-                    memory.remember(action);
+                    // from this same state (see ExecutionMemory / AlreadyExecutedCandidateFilter)
+                    memory.remember(StateSignature.of(currentObservation), action);
 
                     // Update execution state
                     state.incrementIteration();

@@ -36,12 +36,12 @@ public class DefaultLearningEngine implements LearningEngine {
         Map<Action, PatternStatistics> statistics =
                 patternAnalyzer.analyze(experiences);
 
-        Map<Action, Double> adjustments = new HashMap<>();
+        Map<String, Double> adjustments = new HashMap<>();
 
         for (PatternStatistics stat : statistics.values()) {
 
             adjustments.put(
-                    stat.action(),
+                    ActionKey.of(stat.action()),
                     calculateAdjustment(stat.successRate())
             );
         }

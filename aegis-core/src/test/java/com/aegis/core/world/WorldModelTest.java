@@ -9,23 +9,20 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class WorldModelTest {
 
     @Test
-    void unknownTransitionHasNoDestination() {
+    void unknownActionHasNoKnownDestinations() {
 
         WorldModel worldModel = new WorldModel();
 
-        Observation login = observation("https://example.com/login", link("a:nth-of-type(1)"));
-
-        assertTrue(worldModel.knownDestinationOf(login, click("a:nth-of-type(1)")).isEmpty());
+        assertTrue(worldModel.knownDestinationsOf(ActionType.CLICK, "a:nth-of-type(1)").isEmpty());
     }
 
     @Test
@@ -39,14 +36,13 @@ class WorldModelTest {
 
         worldModel.recordTransition(login, clickLink, secure);
 
-        Optional<String> destination = worldModel.knownDestinationOf(login, clickLink);
+        Set<String> destinations = worldModel.knownDestinationsOf(ActionType.CLICK, "a:nth-of-type(1)");
 
-        assertTrue(destination.isPresent());
-        assertEquals(destination.get(), com.aegis.core.reasoning.memory.StateSignature.of(secure));
+        assertEquals(Set.of(com.aegis.core.reasoning.memory.StateSignature.of(secure)), destinations);
     }
 
     @Test
-    void differentActionFromSameStateHasNoKnownDestination() {
+    void differentActionHasNoKnownDestinations() {
 
         WorldModel worldModel = new WorldModel();
 
@@ -55,7 +51,29 @@ class WorldModelTest {
 
         worldModel.recordTransition(login, click("a:nth-of-type(1)"), secure);
 
-        assertTrue(worldModel.knownDestinationOf(login, click("a:nth-of-type(2)")).isEmpty());
+        assertTrue(worldModel.knownDestinationsOf(ActionType.CLICK, "a:nth-of-type(2)").isEmpty());
+    }
+
+    @Test
+    void knownDestinationsAreAggregatedAcrossDifferentSourceStates() {
+
+        WorldModel worldModel = new WorldModel();
+
+        Observation pageA = observation("https://example.com/a", link("#nav-home"));
+        Observation pageB = observation("https://example.com/b", link("#nav-home"));
+        Observation home = observation("https://example.com/", link("#nav-home"));
+        Observation otherHome = observation("https://example.com/home2", link("#nav-home"));
+
+        // The same locator, tried from two different source states, recorded
+        // two different destinations — this is exactly the cross-state
+        // history a candidate reached via a still-untried-from state should
+        // be judged against.
+        worldModel.recordTransition(pageA, click("#nav-home"), home);
+        worldModel.recordTransition(pageB, click("#nav-home"), otherHome);
+
+        Set<String> destinations = worldModel.knownDestinationsOf(ActionType.CLICK, "#nav-home");
+
+        assertEquals(2, destinations.size());
     }
 
     @Test

@@ -86,6 +86,69 @@ class KnownDeadEndCandidateFilterTest {
         assertEquals(1, result.size());
     }
 
+    @Test
+    void removesCandidateProvenDeadFromADifferentSourceStateEvenWhenNeverTriedFromCurrentState() {
+
+        // The core fix this test guards: a persistent nav link ("#nav-home")
+        // was already tried from page A and shown to lead to the already-
+        // visited home page. It's never been tried from page B specifically
+        // — AlreadyExecutedCandidateFilter wouldn't have blocked it — but
+        // WorldModel's cross-state history already answers the question.
+        WorldModel worldModel = new WorldModel();
+        VisitedStateMemory visitedStateMemory = new VisitedStateMemory();
+
+        Observation pageA = observation("https://example.com/a", link("#nav-home"));
+        Observation pageB = observation("https://example.com/b", link("#nav-home"));
+        Observation home = observation("https://example.com/", link("#nav-home"));
+
+        Action clickHome = click("#nav-home");
+
+        worldModel.recordTransition(pageA, clickHome, home);
+        visitedStateMemory.remember(pageA);
+        visitedStateMemory.remember(pageB);
+        visitedStateMemory.remember(home);
+
+        MissionContext context = context(pageB);
+
+        CandidateAction candidateFromPageB = candidate(click("#nav-home"));
+
+        List<CandidateAction> result = new KnownDeadEndCandidateFilter(worldModel, visitedStateMemory)
+                .filter(context, List.of(candidateFromPageB));
+
+        assertTrue(result.isEmpty());
+    }
+
+    @Test
+    void keepsCandidateWithAtLeastOneUnvisitedKnownDestination() {
+
+        // Same locator led to two different destinations from two different
+        // source states in the past; only one has been visited. Since it's
+        // not PROVEN to always dead-end, it stays.
+        WorldModel worldModel = new WorldModel();
+        VisitedStateMemory visitedStateMemory = new VisitedStateMemory();
+
+        Observation pageA = observation("https://example.com/a", link("#nav-random"));
+        Observation pageB = observation("https://example.com/b", link("#nav-random"));
+        Observation visitedDestination = observation("https://example.com/visited", link("#nav-random"));
+        Observation unvisitedDestination = observation("https://example.com/unvisited", link("#nav-random"));
+
+        worldModel.recordTransition(pageA, click("#nav-random"), visitedDestination);
+        worldModel.recordTransition(pageB, click("#nav-random"), unvisitedDestination);
+
+        visitedStateMemory.remember(pageA);
+        visitedStateMemory.remember(pageB);
+        visitedStateMemory.remember(visitedDestination);
+        // unvisitedDestination deliberately not remembered
+
+        Observation pageC = observation("https://example.com/c", link("#nav-random"));
+        MissionContext context = context(pageC);
+
+        List<CandidateAction> result = new KnownDeadEndCandidateFilter(worldModel, visitedStateMemory)
+                .filter(context, List.of(candidate(click("#nav-random"))));
+
+        assertEquals(1, result.size());
+    }
+
     private MissionContext context(Observation current) {
 
         MissionContext context = new MissionContext(

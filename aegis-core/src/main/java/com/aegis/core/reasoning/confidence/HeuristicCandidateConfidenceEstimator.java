@@ -1,5 +1,7 @@
 package com.aegis.core.reasoning.confidence;
 
+import com.aegis.core.reasoning.learning.LearningEngine;
+import com.aegis.core.reasoning.learning.LearningResult;
 import com.aegis.core.reasoning.value.FieldPurpose;
 import com.aegis.model.action.ActionType;
 import com.aegis.model.context.MissionContext;
@@ -14,6 +16,13 @@ public class HeuristicCandidateConfidenceEstimator implements CandidateConfidenc
     private static final double SUBMIT_NOT_READY = 0.15;
     private static final double GENERIC_CLICK = 0.40;
     private static final double DEFAULT_CONFIDENCE = 0.50;
+    private static final double EXPLORATION_BONUS = 0.05;
+
+    private final LearningEngine learningEngine;
+
+    public HeuristicCandidateConfidenceEstimator(LearningEngine learningEngine) {
+        this.learningEngine = learningEngine;
+    }
 
     @Override
     public ConfidenceEstimate estimate(
@@ -22,13 +31,66 @@ public class HeuristicCandidateConfidenceEstimator implements CandidateConfidenc
             ActionType actionType,
             String value) {
 
-        return switch (actionType) {
+        ConfidenceEstimate base = switch (actionType) {
             case TYPE -> estimateType(element);
             case CLICK -> estimateClick(context, element);
             default -> new ConfidenceEstimate(
                     DEFAULT_CONFIDENCE,
                     "No heuristic for " + actionType);
         };
+
+        return applyLearning(context, element, actionType, base);
+    }
+
+    /**
+     * Nudges the heuristic score by whatever Phase 2's LearningEngine has
+     * inferred about this exact (type, locator) so far this mission — e.g.
+     * a click that's failed repeatedly gets deprioritized without needing
+     * a hand-written rule for why. No Action object exists yet at this
+     * point (this runs before DefaultActionFactory builds one), so the
+     * lookup goes by ActionType + the element's own locator, which is
+     * exactly what becomes the Action's target once one is built.
+     *
+     * An action with zero recorded Experience gets a small flat
+     * EXPLORATION_BONUS instead (Phase 3) — it's not the same as landing
+     * in the neutral, 0.0-adjustment success-rate bucket: we have
+     * genuinely no information about it, which is itself a reason to try
+     * it, distinct from having tried it and seen nothing remarkable.
+     */
+    private ConfidenceEstimate applyLearning(
+            MissionContext context, ElementInfo element, ActionType actionType, ConfidenceEstimate base) {
+
+        LearningResult learned = learningEngine.learn(context);
+        String locator = element.locator();
+
+        if (!learned.hasExperience(actionType, locator)) {
+            return adjust(base, EXPLORATION_BONUS, "never tried yet this mission");
+        }
+
+        double adjustment = learned.adjustmentFor(actionType, locator);
+
+        if (adjustment == 0.0) {
+            return base;
+        }
+
+        return adjust(base, adjustment, null);
+    }
+
+    private ConfidenceEstimate adjust(ConfidenceEstimate base, double amount, String extraReason) {
+
+        double adjusted = clamp(base.confidence() + amount, 0.0, 1.0);
+
+        String sign = amount > 0 ? "+" : "";
+        String suffix = String.format("%.2f", amount) + (extraReason != null ? ", " + extraReason : "");
+
+        return new ConfidenceEstimate(
+                adjusted,
+                base.reason() + " (learning-adjusted " + sign + suffix + ")"
+        );
+    }
+
+    private double clamp(double value, double min, double max) {
+        return Math.max(min, Math.min(max, value));
     }
 
     private ConfidenceEstimate estimateType(ElementInfo element) {

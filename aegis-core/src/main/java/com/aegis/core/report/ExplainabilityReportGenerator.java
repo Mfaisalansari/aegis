@@ -1,5 +1,12 @@
 package com.aegis.core.report;
 
+import com.aegis.core.bug.BugCluster;
+import com.aegis.core.bug.BugExplainer;
+import com.aegis.core.bug.RecommendationEngine;
+import com.aegis.core.bug.RuleBasedBugExplainer;
+import com.aegis.core.bug.RuleBasedRecommendationEngine;
+import com.aegis.core.mission.MissionPlan;
+import com.aegis.core.mission.RuleBasedMissionPlanner;
 import com.aegis.model.context.MissionContext;
 import com.aegis.model.finding.Finding;
 import com.aegis.model.mission.MissionStatus;
@@ -15,8 +22,27 @@ import com.aegis.model.reasoning.ReasoningStep;
 public class ExplainabilityReportGenerator {
 
     public String generate(MissionContext context, MissionStatus status) {
+        return generate(context, status, new RuleBasedBugExplainer());
+    }
 
-        MissionReportData data = MissionReportData.from(context, status);
+    /** Same report, but with AI bug explanations (Phase 8) computed via the given BugExplainer. */
+    public String generate(MissionContext context, MissionStatus status, BugExplainer explainer) {
+        return generate(context, status, explainer, new RuleBasedRecommendationEngine());
+    }
+
+    /** Same report, with AI recommendations (Phase 8) also computed via the given RecommendationEngine. */
+    public String generate(
+            MissionContext context, MissionStatus status, BugExplainer explainer, RecommendationEngine recommender) {
+        return generate(context, status, explainer, recommender,
+                new RuleBasedMissionPlanner().plan(context.getMission()));
+    }
+
+    /** Same report, with an AI mission plan (Phase 8) generated before the mission ran. */
+    public String generate(
+            MissionContext context, MissionStatus status, BugExplainer explainer,
+            RecommendationEngine recommender, MissionPlan plan) {
+
+        MissionReportData data = MissionReportData.from(context, status, explainer, recommender, plan);
 
         StringBuilder report = new StringBuilder();
 
@@ -29,6 +55,14 @@ public class ExplainabilityReportGenerator {
 
         report.append('\n').append("Summary:\n  ").append(data.outcomeSummary()).append('\n');
 
+        report.append('\n').append("Mission Plan (advisory, generated before the run):\n");
+
+        for (String step : data.plan().steps()) {
+            report.append("  - ").append(step).append('\n');
+        }
+
+        report.append('\n').append("Recommendation:\n  ").append(data.recommendation()).append('\n');
+
         report.append('\n').append("Pages Visited:\n");
 
         for (String url : data.visitedPages()) {
@@ -40,6 +74,27 @@ public class ExplainabilityReportGenerator {
                 .append(data.states().size()).append(" states, ")
                 .append(data.edges().size()).append(" transitions discovered\n");
 
+        report.append("Exploration Coverage: ")
+                .append(data.coverage().elementsInteracted()).append("/")
+                .append(data.coverage().elementsDiscovered())
+                .append(" discovered interactive elements exercised (")
+                .append(String.format("%.0f%%", data.coverage().coveragePercent()))
+                .append(")\n");
+
+        report.append('\n').append("Page Coverage:\n");
+
+        for (PageCoverage page : data.pageCoverage()) {
+            report.append(String.format(
+                    "  %-60s %d/%d (%.0f%%)%n",
+                    page.url(),
+                    page.elementsInteracted(),
+                    page.elementsDiscovered(),
+                    page.coveragePercent()
+            ));
+        }
+
+        report.append('\n');
+
         for (NavigationEdge edge : data.edges()) {
             report.append(String.format(
                     "  %s %s: %s -> %s%n",
@@ -47,6 +102,26 @@ public class ExplainabilityReportGenerator {
                     edge.actionTarget(),
                     edge.fromState(),
                     edge.toState()
+            ));
+        }
+
+        report.append('\n').append("Bug Clusters (Phase 6 — grouped by normalized fingerprint, most severe first):\n");
+
+        if (data.bugClusters().isEmpty()) {
+            report.append("  (none)\n");
+        }
+
+        for (BugCluster cluster : data.bugClusters()) {
+
+            report.append(String.format(
+                    "  [%s] %s (x%d%s)%n    -> %s%n",
+                    cluster.severity(),
+                    cluster.representativeSummary(),
+                    cluster.occurrenceCount(),
+                    cluster.spansMultiplePages()
+                            ? ", seen on " + cluster.urls().size() + " different pages — may share a root cause"
+                            : "",
+                    data.explanationFor(cluster)
             ));
         }
 

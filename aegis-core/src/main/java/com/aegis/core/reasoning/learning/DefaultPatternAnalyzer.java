@@ -3,7 +3,6 @@ package com.aegis.core.reasoning.learning;
 import com.aegis.model.action.Action;
 import com.aegis.model.experience.Experience;
 import com.aegis.model.experience.ExperienceOutcome;
-import com.aegis.model.reasoning.CandidateAction;
 
 import java.util.HashMap;
 import java.util.List;
@@ -19,18 +18,25 @@ public class DefaultPatternAnalyzer implements PatternAnalyzer {
             return Map.of();
         }
 
-        Map<Action, List<Experience>> groupedExperiences =
+        // Grouped by ActionKey (type + target), not the raw Action record:
+        // every Action carries a fresh random id/createdAt each time a
+        // candidate is regenerated, so grouping by the record itself would
+        // put every experience in its own singleton group and the "pattern"
+        // in PatternAnalyzer would never see more than one data point.
+        Map<String, List<Experience>> groupedExperiences =
                 experiences.stream()
                         .collect(Collectors.groupingBy(
-                                experience -> experience.candidateAction().action()
+                                experience -> ActionKey.of(experience.candidateAction().action())
                         ));
 
         Map<Action, PatternStatistics> statistics = new HashMap<>();
 
-        for (Map.Entry<Action, List<Experience>> entry : groupedExperiences.entrySet()) {
+        for (List<Experience> actionExperiences : groupedExperiences.values()) {
 
-            Action action = entry.getKey();
-            List<Experience> actionExperiences = entry.getValue();
+            // Representative Action for this group, purely so callers still
+            // have a real Action to look at — the group's identity is the
+            // ActionKey above, not this specific instance.
+            Action representativeAction = actionExperiences.get(0).candidateAction().action();
 
             long total = actionExperiences.size();
 
@@ -44,9 +50,9 @@ public class DefaultPatternAnalyzer implements PatternAnalyzer {
                     total == 0 ? 0.0 : (double) successful / total;
 
             statistics.put(
-                    action,
+                    representativeAction,
                     new PatternStatistics(
-                            action,
+                            representativeAction,
                             total,
                             successful,
                             failed,
