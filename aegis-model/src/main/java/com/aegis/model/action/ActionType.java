@@ -4,6 +4,10 @@ public enum ActionType {
 
     CLICK,
 
+    DOUBLE_CLICK,
+
+    RACE_CLICK,
+
     TYPE,
 
     SELECT,
@@ -12,6 +16,12 @@ public enum ActionType {
 
     SCROLL,
 
-    NAVIGATE
+    NAVIGATE,
+
+    REFRESH,
+
+    BACK,
+
+    COMPLETE
 
 }
