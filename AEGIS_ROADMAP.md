@@ -2,7 +2,7 @@
 
 > Version: 1.0 (Architecture Freeze)
 >
-> Status: In Development
+> Status: AEGIS v1.0 — every roadmap phase complete
 >
 > Last Updated: 2026-07-25
 
@@ -332,20 +332,38 @@ Live-verified against a real Playwright browser and a real local page (not just 
 
 ---
 
-# 🔴 Phase 10 – AEGIS v1.0
+# 🟢 Phase 10 – AEGIS v1.0
 
 ## Status
 
-Not Started
+Completed (2026-07-25)
 
 ## Deliverables
 
-- Autonomous exploratory testing
-- Adaptive learning
-- Coverage intelligence
-- AI reasoning
-- Production reporting
-- Stable public API
+Five of the six were already delivered by earlier phases — this milestone's Review step is confirming each still holds, not rebuilding it:
+
+- ✅ **Autonomous exploratory testing** — Phase 1 (Core Autonomous Engine): the full Observe → Reason → Decide → Execute loop, no scripted steps.
+- ✅ **Adaptive learning** — Phase 2 (Learning Framework) + Phase 3 (Adaptive Decision Making): `ExperienceRepository`/`LearningEngine` feed `HeuristicCandidateConfidenceEstimator`, and `AdaptiveActionScorer` switches strategy mid-mission on its own.
+- ✅ **Coverage intelligence** — Phase 5: `CoverageAwareActionScorer`, `WorldModel`-backed dead-end pruning, `ExplorationCoverage`/`PageCoverage` in every report.
+- ✅ **AI reasoning** — Phase 8: four independent, opt-in LLM-backed features (`LlmActionScorer`, `LlmBugExplainer`, `LlmRecommendationEngine`, `LlmMissionParser`, `LlmMissionPlanner` — five, technically), every one with a rule-based fallback and never trusted with anything more than it validates.
+- ✅ **Production reporting** — Phase 7 + Reporting v2: text/HTML/JSON, Mission Timeline, coverage, learning, findings dashboard, all frozen-component-safe.
+- ✅ **Stable public API** — new this milestone, see below. This was the one genuine gap: every other deliverable already existed, but there was no actual public entry point for embedding AEGIS — `MissionRunner`, the class that ran a mission end-to-end and generated all three reports, was package-private inside `aegis-launcher`. A consumer had nothing to call short of copy-pasting it.
+
+## Design: the public API
+
+New public facade in `aegis-core` (the reusable library module, not `aegis-launcher`, which is example/CLI code): `com.aegis.core.Aegis.run(Mission)` returns a new `AegisReport` record — the `MissionResult`, the `MissionPlan`, and all three report formats as in-memory `String` content. Deliberately **not** writing to disk: where (or whether) to persist a report is the caller's decision, not the library's — `aegis-launcher`'s `MissionRunner` now delegates to `Aegis.run(...)` and does the file-writing/console-printing itself, exactly as before from every `*Main` class's point of view.
+
+This is the actual meaning of "stable" here: `Mission`, `Aegis`/`AegisReport`, `MissionResult`, and the three report generators' `generate(...)` methods are the versioned external contract going forward — changes should be additive (new overloads), not breaking. This is a different, narrower kind of "stable" than the Architecture Status section's Stable Components list above: that list is about internal reasoning components not being redesigned; this is about what an external caller can rely on. `EngineFactory`'s internal wiring stays exactly as un-promised as it always was.
+
+6 new tests (`AegisReportTest` plus the existing suite unaffected). Full suite: 213/213 passing.
+
+## Verification
+
+Live-verified with a dedicated harness compiled and run against **only** the `aegis-model` and `aegis-core` build outputs — `aegis-launcher` deliberately absent from the classpath — proving a real external consumer can embed AEGIS with nothing but the library module and one call. Ran a single capstone mission exercising every major capability at once through `Aegis.run(...)` alone: `explorationStrategy: adaptive`, `interruptions`/`doubleClicks`/`raceConditions` all enabled, all three AI report features (`AEGIS_LLM_MISSION_PLANNING`/`_BUG_EXPLANATIONS`/`_RECOMMENDATIONS`) enabled against a fake OpenAI-compatible server, against a real saucedemo.com login. Result: `SUCCESS`, the AI-generated mission plan showed up correctly in the returned report content (confirming the LLM toggle wiring survived the refactor), and all three report formats had the expected shape. Bug-explanation/recommendation markers correctly did not appear — this run found zero bugs, so there was nothing for either feature to fire on; both were already proven working against a real anomaly in Sprint 32/33's own live verification.
+
+Also bumped every module's Maven version from `0.1.0-SNAPSHOT` to `1.0.0-SNAPSHOT` — leaving it at `0.1.0-SNAPSHOT` while this document declared "AEGIS v1.0: Completed" would be a genuine inconsistency. Still a SNAPSHOT: no tag, publish, or release was performed — that's a separate, deliberate action for the user to take when ready, not something to do unilaterally as part of finishing a roadmap milestone.
+
+**This completes Phase 10 – AEGIS v1.0, and with it every phase on this roadmap.**
 
 ---
 

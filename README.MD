@@ -887,6 +887,22 @@ Verified live against a real Playwright browser and a real local page, not just 
 
 ---
 
+## Sprint 36 — Phase 10: AEGIS v1.0 (Complete)
+
+The wrap-up milestone. Five of its six deliverables — autonomous exploratory testing, adaptive learning, coverage intelligence, AI reasoning, production reporting — were already shipped by earlier phases; this sprint's job was confirming each still holds and closing the one genuine gap.
+
+- ✅ **Stable public API**: until now, the only way to run a mission end-to-end (execute + generate all three reports) was `aegis-launcher`'s `MissionRunner` — package-private, `aegis-launcher`-only. New public facade in `aegis-core`, the actual library module: `Aegis.run(Mission)` → `AegisReport` (the `MissionResult`, the `MissionPlan`, and text/HTML/JSON report content, all in-memory). Deliberately doesn't write to disk — that's a caller decision, not the library's. `aegis-launcher`'s `MissionRunner` now delegates to it and handles file-writing/console output itself; every existing `*Main` class works identically.
+- ✅ `Mission`, `Aegis`/`AegisReport`, `MissionResult`, and the three report generators' `generate(...)` methods are now the versioned public contract — a different, narrower kind of "stable" than the Architecture Status Stable Components list (that one's about internal reasoning components not being redesigned; this is about what external code can rely on).
+- 1 new unit test (`AegisReportTest`). Full suite: 213/213 passing.
+
+Verified live with a harness compiled and run against **only** the `aegis-model`/`aegis-core` build outputs — `aegis-launcher` deliberately excluded from the classpath — proving a real external consumer can embed AEGIS with just the library module and one call. Ran a single capstone mission through `Aegis.run(...)` alone exercising most of what this project has built at once: `explorationStrategy: adaptive`, interruptions/double-clicks/race-conditions all enabled, all three AI report features enabled against a fake OpenAI-compatible server, against a real saucedemo.com login. Result: `SUCCESS`, the AI-generated mission plan appeared correctly in the returned report (confirming the LLM toggle wiring survived the refactor), all three report formats had the expected shape. Bug-explanation/recommendation markers correctly didn't fire — zero bugs found this run, nothing to explain — both already proven live against a real anomaly back in Sprint 32/33.
+
+Also bumped every module's Maven version from `0.1.0-SNAPSHOT` to `1.0.0-SNAPSHOT`, so the build metadata matches what this document now says. Still a SNAPSHOT — no tag, publish, or release was performed; that's a separate call for whoever owns the release process, not something to do silently while closing out a roadmap milestone.
+
+**This completes Phase 10 – AEGIS v1.0 — and with it, every phase on the roadmap.**
+
+---
+
 # Long-Term Vision
 
 AEGIS is not intended to replace Selenium or Playwright.
@@ -947,13 +963,15 @@ Future
 Current Version
 
 ```
-v0.1
+v1.0.0-SNAPSHOT
 ```
 
 Current State
 
-**Rule-Based Autonomous QA Agent, with an opt-in AI-assisted decision point (`explorationStrategy: llm`, Sprint 26)**
+**Rule-Based Autonomous QA Agent, with five independent opt-in AI-assisted decision points** (`explorationStrategy: llm` candidate scoring, mission-plan preview, bug explanation, recommendation, natural-language mission parsing — see Phase 8), plus adaptive/coverage-aware exploration, self-healing execution, and a stable public API (`Aegis.run(Mission)` in `aegis-core`). Every roadmap phase (0 through 10) is complete.
+
+Honest framing, unchanged from every earlier sprint's own discipline: rule-based is still the *default* everywhere, not AI. Every LLM-backed feature is opt-in, falls back to a deterministic rule-based implementation on any failure, and candidate generation/input values/anomaly classification stay fully deterministic. "AEGIS v1.0" means the roadmap's original six deliverables are real and shipped — it doesn't mean AI-by-default; that would be a different, larger milestone this project hasn't taken on.
 
 Next Milestone
 
-**Generic Exploratory AI Agent** — the LLM strategy is real but narrow (candidate scoring only, opt-in, falls back to the rule-based default); the milestone isn't reached until an AI-backed decision-maker is the default, not an option, and covers more of the pipeline than picking among pre-validated candidates.
+Not yet chosen — every phase this roadmap named is done. Real candidates for a v1.1+ direction (none started, none promised): an AI-backed decision-maker as the *default* rather than an opt-in strategy; cross-run experience persistence (today's `ExecutionMemory`/`WorldModel`/`ExperienceRepository` are explicitly in-run only, see `ARCHITECTURE.md`); real screenshot capture behind Reporting v2's existing hook; a published/tagged release now that the version line has moved to `1.0.0-SNAPSHOT`.

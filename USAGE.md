@@ -50,7 +50,7 @@ If you want a command-line path, add this to `aegis-launcher/pom.xml` and then r
 
 ### Existing launcher entry points
 
-Every one of these calls the shared `MissionRunner.run(mission)`, which executes the mission, prints a summary to the console, and writes both report formats (see §7).
+Every one of these calls the shared `MissionRunner.run(mission)`, which executes the mission, prints a summary to the console, and writes all three report formats (see §7). As of v1.0, `MissionRunner` is itself just a thin CLI wrapper around the public `Aegis.run(mission)` API in `aegis-core` — see §8a if you want to embed AEGIS in your own code instead of using one of these launcher classes.
 
 | Class | Target | What it demonstrates |
 |---|---|---|
@@ -169,18 +169,21 @@ Run any mission with `explorationStrategy: llm` and check the console log:
 
 ## 7. Reports
 
-Every mission run writes two report files to a `reports/` directory **relative to the JVM's working directory** (created automatically if missing):
+Every mission run writes three report files to a `reports/` directory **relative to the JVM's working directory** (created automatically if missing):
 
 ```
 reports/aegis-report-<epoch-millis>.txt
 reports/aegis-report-<epoch-millis>.html
+reports/aegis-report-<epoch-millis>.json
 ```
 
-Both files from the same run share the identical timestamp. Console output prints both paths at the end of the run.
+All three files from the same run share the identical timestamp. Console output prints all three paths at the end of the run. If you're calling `Aegis.run(mission)` directly instead of going through a launcher `*Main` class, you get all three as in-memory `String`s (`AegisReport.textReport()`/`.htmlReport()`/`.jsonReport()`) and decide yourself whether/where to write them — see §8a.
 
-**Text report** (`ExplainabilityReportGenerator`) — plain text, good for grepping/diffing. Contains, in order: mission plan, recommendation, pages visited, world model (states/transitions), exploration coverage, page-by-page coverage, bug clusters (with AI explanations if enabled), flat findings list, and the full reasoning trace (every candidate considered at every step, not just what was chosen).
+**Text report** (`ExplainabilityReportGenerator`) — plain text, good for grepping/diffing. Contains, in order: executive summary and statistics, mission plan, recommendation, Mission Timeline (chronological Observed/Reasoning/Execution/Findings reconstruction), pages visited, world model (states/transitions), exploration coverage (with a per-page checklist), learning summary (best/worst-performing actions), a findings dashboard grouped by category, bug clusters (with AI explanations if enabled), flat findings list, and the full reasoning trace (every candidate considered at every step, not just what was chosen).
 
-**HTML report** (`HtmlExplainabilityReportGenerator`) — self-contained (inline CSS/JS, no external assets, works fully offline). Same data, rendered visually: an interactive SVG navigation graph with a heat map (node size/fill-opacity and edge thickness scale with how many times that state/transition was actually visited — hover a node to highlight its edges), stat tiles, per-page coverage bars, and collapsible reasoning steps.
+**HTML report** (`HtmlExplainabilityReportGenerator`) — self-contained (inline CSS/JS, no external assets, works fully offline). A sticky table-of-contents nav links every section. Same data as the text report, rendered visually: a filterable Mission Timeline (toggle by event kind), an interactive SVG navigation graph with a heat map (node size/fill-opacity and edge thickness scale with how many times that state/transition was actually visited — hover a node to highlight its edges), stat tiles, per-page coverage bars, a learning performance table, a findings dashboard, and collapsible reasoning steps. `TimelineEvent` carries a `screenshotPath` field the HTML/text renderers already display when present — no live screenshot capture exists yet (see README's "Next Milestone"), so it's `null` today.
+
+**JSON report** (`JsonReportGenerator`) — the same data as a stable, intentional export schema (top-level keys: `mission`, `coverage`, `worldModelEdges`, `recommendation`, `plan`, `timeline`, `learning`, `bugClusters`, `findingsByCategory`, `findings`), for feeding into another tool rather than reading directly.
 
 ---
 
@@ -228,6 +231,40 @@ MissionRunner.run(mission);
 ```
 
 The model extracts `baseUrl`, `goal`, `successUrlContains`, `username`, `password` as JSON; `baseUrl` is validated as a real `http(s)` URL before use, so a malformed or missing URL falls back to `RuleBasedMissionParser` (a bare URL regex against the instruction text) rather than producing a broken mission.
+
+---
+
+## 8a. Embedding AEGIS as a library
+
+If you're depending on `aegis-core` from your own project (rather than copying one of `aegis-launcher`'s `*Main` classes), the public entry point is `com.aegis.core.Aegis.run(Mission)`:
+
+```java
+import com.aegis.core.Aegis;
+import com.aegis.core.AegisReport;
+import com.aegis.model.mission.Mission;
+
+import java.util.Map;
+import java.util.UUID;
+
+Mission mission = new Mission(
+        UUID.randomUUID(),
+        "My Mission",
+        "Short description of the goal",
+        Map.of("baseUrl", "https://example.com/", "successUrlContains", "...")
+);
+
+AegisReport report = Aegis.run(mission);
+
+report.status();       // MissionStatus
+report.plan();          // MissionPlan — the pre-execution plan preview
+report.textReport();    // String
+report.htmlReport();    // String
+report.jsonReport();    // String
+```
+
+Nothing is written to disk — that's a decision for your own code, not the library's. `aegis-core` alone is enough; you don't need `aegis-launcher` at all. `Mission`, `Aegis`/`AegisReport`, `MissionResult`, and the three report generators' `generate(...)` methods are the versioned public contract as of v1.0 — see `AEGIS_ROADMAP.md`'s Phase 10 section for exactly what that promise covers.
+
+Self-healing (retry + locator healing + navigation recovery, Phase 9) requires no configuration — it's always on, wrapping the browser layer transparently for every mission run.
 
 ---
 
