@@ -7,6 +7,8 @@ import com.aegis.core.bug.RuleBasedBugExplainer;
 import com.aegis.core.bug.RuleBasedRecommendationEngine;
 import com.aegis.core.mission.MissionPlan;
 import com.aegis.core.mission.RuleBasedMissionPlanner;
+import com.aegis.core.reasoning.learning.PatternStatistics;
+import com.aegis.model.experience.Experience;
 import com.aegis.model.finding.Finding;
 import com.aegis.model.mission.MissionStatus;
 import com.aegis.model.reasoning.CandidateAction;
@@ -14,6 +16,9 @@ import com.aegis.model.reasoning.NavigationEdge;
 import com.aegis.model.reasoning.ReasoningStep;
 import com.aegis.model.context.MissionContext;
 
+import java.time.Duration;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -27,6 +32,9 @@ import java.util.stream.Collectors;
  * (MissionReportData); this just renders it visually instead of as text.
  */
 public class HtmlExplainabilityReportGenerator {
+
+    private static final DateTimeFormatter TIME_FORMAT =
+            DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault());
 
     public String generate(MissionContext context, MissionStatus status) {
         return generate(context, status, new RuleBasedBugExplainer());
@@ -48,8 +56,22 @@ public class HtmlExplainabilityReportGenerator {
     public String generate(
             MissionContext context, MissionStatus status, BugExplainer explainer,
             RecommendationEngine recommender, MissionPlan plan) {
+        return generate(context, status, explainer, recommender, plan, List.of());
+    }
 
-        MissionReportData data = MissionReportData.from(context, status, explainer, recommender, plan);
+    /**
+     * The full report, with this mission's own Experience list (Reporting
+     * v2) also supplied — powers the Mission Timeline's accurate
+     * Execution Successful/Failed events and the Learning summary. Pass
+     * List.of() (what every shorter overload above does) if no
+     * ExperienceRepository is available; both degrade gracefully rather
+     * than failing.
+     */
+    public String generate(
+            MissionContext context, MissionStatus status, BugExplainer explainer,
+            RecommendationEngine recommender, MissionPlan plan, List<Experience> experiences) {
+
+        MissionReportData data = MissionReportData.from(context, status, explainer, recommender, plan, experiences);
 
         StringBuilder html = new StringBuilder();
 
@@ -59,11 +81,16 @@ public class HtmlExplainabilityReportGenerator {
         html.append("</head><body>");
 
         html.append(renderHeader(data));
+        html.append(renderTableOfContents());
         html.append(renderSummary(data));
-        html.append(renderPlan(data));
+        html.append(renderRecommendation(data));
         html.append(renderStats(data));
+        html.append(renderTimeline(data));
+        html.append(renderPlan(data));
         html.append(renderGraph(data));
         html.append(renderPageCoverage(data));
+        html.append(renderLearning(data));
+        html.append(renderFindingsDashboard(data));
         html.append(renderBugClusters(data));
         html.append(renderFindings(data));
         html.append(renderSteps(data));
@@ -85,17 +112,140 @@ public class HtmlExplainabilityReportGenerator {
     }
 
     /**
-     * The thing a reader wants before any raw data: what AEGIS was trying
-     * to do and what actually happened, in one place.
+     * Reporting v2 Stage 3 "interactive HTML": the report has grown to a
+     * dozen-plus sections — a sticky jump nav so a reader can go straight
+     * to the one they want instead of scrolling past everything else.
+     */
+    private String renderTableOfContents() {
+
+        return "<nav class=\"toc\">"
+                + "<a href=\"#summary\">Summary</a>"
+                + "<a href=\"#recommendation\">Recommendation</a>"
+                + "<a href=\"#stats\">Statistics</a>"
+                + "<a href=\"#timeline\">Timeline</a>"
+                + "<a href=\"#plan\">Plan</a>"
+                + "<a href=\"#world-model\">World Model</a>"
+                + "<a href=\"#coverage\">Coverage</a>"
+                + "<a href=\"#learning\">Learning</a>"
+                + "<a href=\"#findings-dashboard\">Findings</a>"
+                + "<a href=\"#bug-clusters\">Bug Clusters</a>"
+                + "<a href=\"#reasoning-steps\">Reasoning</a>"
+                + "</nav>";
+    }
+
+    /**
+     * Reporting v2's Executive Summary — the thing a manager should be
+     * able to stop at: mission, duration, result, coverage, findings,
+     * bug clusters, a one-line learning teaser, and the recommendation,
+     * all in one place, before any raw data.
      */
     private String renderSummary(MissionReportData data) {
 
-        return "<section class=\"summary\">"
+        return "<section id=\"summary\" class=\"summary\">"
                 + "<p class=\"goal\"><strong>Goal:</strong> " + escape(data.missionGoal()) + "</p>"
                 + "<p class=\"outcome\">" + escape(data.outcomeSummary()) + "</p>"
-                + "<p class=\"recommendation\"><strong>Recommendation:</strong> "
-                + escape(data.recommendation()) + "</p>"
+                + "<dl class=\"exec-facts\">"
+                + fact("Duration", formatDuration(data.duration()))
+                + fact("Coverage", String.format("%.0f%%", data.coverage().coveragePercent()))
+                + fact("Findings", String.valueOf(data.findings().size()))
+                + fact("Bug Clusters", String.valueOf(data.bugClusters().size()))
+                + fact("Learning", learningLine(data.learningSummary()))
+                + "</dl>"
                 + "</section>";
+    }
+
+    private String fact(String label, String value) {
+        return "<div><dt>" + escape(label) + "</dt><dd>" + escape(value) + "</dd></div>";
+    }
+
+    /**
+     * Reporting v2 Stage 2 "improved recommendations": the recommendation
+     * itself (Phase 8) is unchanged — this is presentation only, a
+     * standalone callout instead of a line buried inside the summary
+     * paragraph, since it's the single "so what do I do" line a reader
+     * most wants after the Executive Summary.
+     */
+    private String renderRecommendation(MissionReportData data) {
+
+        return "<section id=\"recommendation\" class=\"recommendation-callout\">"
+                + "<div class=\"recommendation-label\">Recommendation</div>"
+                + "<div class=\"recommendation-text\">" + escape(data.recommendation()) + "</div>"
+                + "</section>";
+    }
+
+    private String learningLine(LearningSummary summary) {
+
+        if (summary.newExperiences() == 0 && summary.updatedActions() == 0) {
+            return "no experience recorded this mission";
+        }
+
+        return summary.newExperiences() + " new, " + summary.updatedActions() + " updated — "
+                + summary.confidenceIncreased() + " improved, " + summary.confidenceReduced() + " declined";
+    }
+
+    private String formatDuration(Duration duration) {
+
+        long totalSeconds = duration.toSeconds();
+
+        if (totalSeconds < 60) {
+            return String.format("%.1fs", duration.toMillis() / 1000.0);
+        }
+
+        return (totalSeconds / 60) + "m " + (totalSeconds % 60) + "s";
+    }
+
+    /**
+     * Reporting v2's Mission Timeline — "the heart of Reporting": a
+     * vertical, chronological replay of the whole run, built from
+     * MissionReportData.timeline() (reconstructed purely from
+     * already-recorded data, see MissionReportData.buildTimeline). Each
+     * event kind gets its own color so the shape of a run — observe,
+     * reason, execute, find — is visible at a glance before reading a
+     * single line of detail.
+     */
+    private String renderTimeline(MissionReportData data) {
+
+        StringBuilder section = new StringBuilder("<section id=\"timeline\"><h2>Mission Timeline</h2>"
+                + "<p class=\"caption\">A chronological replay of the whole run, reconstructed from what was "
+                + "actually recorded — nothing here was captured separately from the data elsewhere in this "
+                + "report.</p>");
+
+        section.append("<div class=\"timeline-filter\">"
+                + "<button data-kind=\"all\" class=\"active\">All</button>"
+                + "<button data-kind=\"observation\">Observations</button>"
+                + "<button data-kind=\"reasoning\">Reasoning</button>"
+                + "<button data-kind=\"execution\">Executions</button>"
+                + "<button data-kind=\"finding\">Findings</button>"
+                + "</div>");
+
+        section.append("<ol class=\"timeline\">");
+
+        for (TimelineEvent event : data.timeline()) {
+
+            String kindClass = event.kind().name().toLowerCase().replace('_', '-');
+
+            section.append("<li class=\"timeline-event ").append(kindClass).append("\">")
+                    .append("<span class=\"timeline-time\">").append(TIME_FORMAT.format(event.timestamp()))
+                    .append("</span>")
+                    .append("<span class=\"timeline-dot\"></span>")
+                    .append("<div class=\"timeline-body\">")
+                    .append("<div class=\"timeline-headline\">").append(escape(event.headline())).append("</div>");
+
+            if (event.detail() != null && !event.detail().isBlank()) {
+                section.append("<div class=\"timeline-detail\">").append(escape(event.detail())).append("</div>");
+            }
+
+            if (event.screenshotPath() != null && !event.screenshotPath().isBlank()) {
+                section.append("<img class=\"timeline-screenshot\" src=\"")
+                        .append(escapeAttr(event.screenshotPath())).append("\" alt=\"Screenshot\"/>");
+            }
+
+            section.append("</div></li>");
+        }
+
+        section.append("</ol></section>");
+
+        return section.toString();
     }
 
     /**
@@ -106,7 +256,7 @@ public class HtmlExplainabilityReportGenerator {
      */
     private String renderPlan(MissionReportData data) {
 
-        StringBuilder section = new StringBuilder("<section><h2>Mission Plan</h2>"
+        StringBuilder section = new StringBuilder("<section id=\"plan\"><h2>Mission Plan</h2>"
                 + "<p class=\"caption\">Advisory only — generated before the run, never read by the live "
                 + "decision-making pipeline.</p><ol class=\"plan\">");
 
@@ -126,16 +276,19 @@ public class HtmlExplainabilityReportGenerator {
         long high = data.findings().stream()
                 .filter(f -> f.severity().name().equals("HIGH")).count();
 
-        StringBuilder tiles = new StringBuilder("<section class=\"stats\">");
+        StringBuilder tiles = new StringBuilder("<section id=\"stats\" class=\"stats\">");
+        tiles.append(tile("Actions Executed", String.valueOf(data.actionsExecuted())));
         tiles.append(tile("Pages Visited", String.valueOf(data.visitedPages().size())));
         tiles.append(tile("States Discovered", String.valueOf(data.states().size())));
         tiles.append(tile("Transitions", String.valueOf(data.edges().size())));
-        tiles.append(tile("Reasoning Steps", String.valueOf(data.reasoningSteps().size())));
         tiles.append(tile("Element Coverage",
                 data.coverage().elementsInteracted() + "/" + data.coverage().elementsDiscovered()
                         + " (" + String.format("%.0f%%", data.coverage().coveragePercent()) + ")"));
-        tiles.append(tile("Findings", data.findings().size()
+        tiles.append(tile("Avg Confidence", String.format("%.2f", data.averageConfidence())));
+        tiles.append(tile("Bug Count", data.findings().size()
                 + (critical + high > 0 ? " (" + (critical + high) + " critical/high)" : "")));
+        tiles.append(tile("Clusters", String.valueOf(data.bugClusters().size())));
+        tiles.append(tile("Duration", formatDuration(data.duration())));
         tiles.append("</section>");
 
         return tiles.toString();
@@ -148,7 +301,7 @@ public class HtmlExplainabilityReportGenerator {
 
     private String renderGraph(MissionReportData data) {
 
-        StringBuilder section = new StringBuilder("<section><h2>World Model</h2>"
+        StringBuilder section = new StringBuilder("<section id=\"world-model\"><h2>World Model</h2>"
                 + "<p class=\"caption\">Node size/fill and edge thickness reflect how many times "
                 + "exploration passed through that state or transition (Phase 5 heat map).</p>");
 
@@ -369,7 +522,16 @@ public class HtmlExplainabilityReportGenerator {
 
     private String renderPageCoverage(MissionReportData data) {
 
-        StringBuilder section = new StringBuilder("<section><h2>Page Coverage</h2>");
+        StringBuilder section = new StringBuilder("<section id=\"coverage\"><h2>Coverage</h2>"
+                + "<p class=\"caption\">Pages AEGIS discovered this run — there's no sitemap, so a page it never "
+                + "found can't be listed as \"not visited\"; see the World Model graph above and its heat map for "
+                + "how often each state was actually revisited.</p><ul class=\"page-checklist\">");
+
+        for (String url : data.visitedPages()) {
+            section.append("<li>✓ ").append(escape(url)).append("</li>");
+        }
+
+        section.append("</ul>");
 
         if (data.pageCoverage().isEmpty()) {
             section.append("<p class=\"empty\">No pages observed.</p></section>");
@@ -394,9 +556,102 @@ public class HtmlExplainabilityReportGenerator {
         return section.toString();
     }
 
+    /**
+     * Learning (Reporting v2 Stage 2): the user should see AEGIS
+     * improving, not just that Phase 2's LearningEngine exists. A
+     * straight read of MissionReportData.learningSummary().
+     */
+    private String renderLearning(MissionReportData data) {
+
+        LearningSummary summary = data.learningSummary();
+
+        StringBuilder section = new StringBuilder("<section id=\"learning\"><h2>Learning</h2>");
+
+        section.append("<div class=\"stats\">")
+                .append(tile("New Experiences", String.valueOf(summary.newExperiences())))
+                .append(tile("Updated Actions", String.valueOf(summary.updatedActions())))
+                .append(tile("Confidence Increased", String.valueOf(summary.confidenceIncreased())))
+                .append(tile("Confidence Reduced", String.valueOf(summary.confidenceReduced())))
+                .append("</div>");
+
+        if (summary.actionPerformance().isEmpty()) {
+            section.append("<p class=\"empty\">No experience recorded this mission.</p></section>");
+            return section.toString();
+        }
+
+        List<PatternStatistics> best = summary.actionPerformance()
+                .subList(0, Math.min(3, summary.actionPerformance().size()));
+
+        List<PatternStatistics> worstFirst = summary.actionPerformance().reversed();
+        List<PatternStatistics> worst = worstFirst.subList(0, Math.min(3, worstFirst.size()));
+
+        section.append("<div class=\"performance-columns\">");
+        section.append("<div><h3>Best Performing Actions</h3>").append(performanceTable(best)).append("</div>");
+        section.append("<div><h3>Worst Performing Actions</h3>").append(performanceTable(worst)).append("</div>");
+        section.append("</div></section>");
+
+        return section.toString();
+    }
+
+    private String performanceTable(List<PatternStatistics> stats) {
+
+        StringBuilder table = new StringBuilder(
+                "<table><thead><tr><th>Action</th><th>Success Rate</th><th>Runs</th></tr></thead><tbody>");
+
+        for (PatternStatistics stat : stats) {
+
+            table.append("<tr><td>").append(escape(stat.action().type() + " " + stat.action().target())).append("</td>")
+                    .append("<td><div class=\"bar\"><div class=\"bar-fill\" style=\"width:")
+                    .append((int) (stat.successRate() * 100)).append("%\"></div></div> ")
+                    .append(String.format("%.0f%%", stat.successRate() * 100)).append("</td>")
+                    .append("<td>").append(stat.successfulExecutions()).append("/").append(stat.totalExecutions())
+                    .append("</td></tr>");
+        }
+
+        table.append("</tbody></table>");
+
+        return table.toString();
+    }
+
+    /**
+     * Findings Dashboard (Reporting v2 Stage 2): the same BugClusters
+     * Phase 6 already computed, grouped one level further by what kind
+     * of problem they are (see FindingCategory) instead of only by
+     * fingerprint.
+     */
+    private String renderFindingsDashboard(MissionReportData data) {
+
+        StringBuilder section = new StringBuilder("<section id=\"findings-dashboard\"><h2>Findings Dashboard</h2>"
+                + "<p class=\"caption\">Bug clusters grouped by category, not just fingerprint.</p>");
+
+        if (data.findingsByCategory().isEmpty()) {
+            section.append("<p class=\"empty\">No findings to categorize.</p></section>");
+            return section.toString();
+        }
+
+        for (Map.Entry<FindingCategory, List<BugCluster>> entry : data.findingsByCategory().entrySet()) {
+
+            section.append("<h3>").append(escape(entry.getKey().toString()))
+                    .append(" (").append(entry.getValue().size()).append(")</h3>");
+
+            for (BugCluster cluster : entry.getValue()) {
+
+                section.append("<div class=\"finding ").append(cluster.severity().name().toLowerCase()).append("\">")
+                        .append("<span class=\"severity\">").append(cluster.severity()).append("</span> ")
+                        .append("<span class=\"summary\">").append(escape(cluster.representativeSummary())).append("</span>")
+                        .append("<div class=\"meta\">×").append(cluster.occurrenceCount()).append("</div>")
+                        .append("</div>");
+            }
+        }
+
+        section.append("</section>");
+
+        return section.toString();
+    }
+
     private String renderBugClusters(MissionReportData data) {
 
-        StringBuilder section = new StringBuilder("<section><h2>Bug Clusters</h2>"
+        StringBuilder section = new StringBuilder("<section id=\"bug-clusters\"><h2>Bug Clusters</h2>"
                 + "<p class=\"caption\">Findings grouped by a normalized fingerprint (Phase 6) — "
                 + "recurring or cross-page clusters are stronger signals than any single occurrence.</p>");
 
@@ -433,7 +688,7 @@ public class HtmlExplainabilityReportGenerator {
 
     private String renderFindings(MissionReportData data) {
 
-        StringBuilder section = new StringBuilder("<section><h2>Findings (most severe first)</h2>");
+        StringBuilder section = new StringBuilder("<section id=\"findings\"><h2>Findings (most severe first)</h2>");
 
         if (data.findings().isEmpty()) {
             section.append("<p class=\"empty\">No findings.</p></section>");
@@ -458,7 +713,7 @@ public class HtmlExplainabilityReportGenerator {
 
     private String renderSteps(MissionReportData data) {
 
-        StringBuilder section = new StringBuilder("<section><h2>Reasoning Steps</h2>");
+        StringBuilder section = new StringBuilder("<section id=\"reasoning-steps\"><h2>Reasoning Steps</h2>");
 
         if (data.reasoningSteps().isEmpty()) {
             section.append("<p class=\"empty\">No reasoning steps recorded.</p></section>");
@@ -474,19 +729,24 @@ public class HtmlExplainabilityReportGenerator {
                     : String.format("+%.2f over %d alternative%s", margin, step.candidates().size() - 1,
                             step.candidates().size() - 1 == 1 ? "" : "s");
 
+            boolean stepWasLearned = selected.reasoning().contains("learning-adjusted");
+
             section.append("<details class=\"step\">")
                     .append("<summary>Step ").append(step.step()).append(": ")
                     .append(escape(selected.action().type() + " " + selected.action().target()))
                     .append(" <span class=\"confidence\">confidence=")
                     .append(String.format("%.2f", selected.confidence()))
-                    .append(" (").append(marginText).append(")</span></summary>");
+                    .append(" (").append(marginText).append(")</span>")
+                    .append(stepWasLearned ? " <span class=\"learned-badge\">learned</span>" : "")
+                    .append("</summary>");
 
             section.append("<div class=\"candidates\"><table><thead><tr>"
-                    + "<th>Type</th><th>Target</th><th>Confidence</th><th>Reasoning</th></tr></thead><tbody>");
+                    + "<th>Type</th><th>Target</th><th>Confidence</th><th></th><th>Reasoning</th></tr></thead><tbody>");
 
             for (CandidateAction candidate : step.candidates()) {
 
                 boolean isSelected = candidate.action().id().equals(selected.action().id());
+                boolean candidateWasLearned = candidate.reasoning().contains("learning-adjusted");
 
                 section.append("<tr class=\"").append(isSelected ? "selected" : "").append("\">")
                         .append("<td>").append(candidate.action().type()).append("</td>")
@@ -494,6 +754,8 @@ public class HtmlExplainabilityReportGenerator {
                         .append("<td><div class=\"bar\"><div class=\"bar-fill\" style=\"width:")
                         .append((int) (candidate.confidence() * 100)).append("%\"></div></div> ")
                         .append(String.format("%.2f", candidate.confidence())).append("</td>")
+                        .append("<td>").append(candidateWasLearned ? "<span class=\"learned-badge\">learned</span>" : "")
+                        .append(isSelected ? " <span class=\"winner-badge\">winner</span>" : "").append("</td>")
                         .append("<td>").append(escape(candidate.reasoning())).append("</td>")
                         .append("</tr>");
             }
@@ -522,7 +784,12 @@ public class HtmlExplainabilityReportGenerator {
                 * { box-sizing: border-box; }
                 body { margin: 0; padding: 2rem; background: var(--bg); color: var(--fg);
                     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-                header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; }
+                header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+                .toc { position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap; gap: .25rem 1rem;
+                    background: var(--bg); padding: .6rem 0 1rem; margin-bottom: 1rem;
+                    border-bottom: 1px solid var(--border); font-size: .82rem; }
+                .toc a { color: var(--muted); text-decoration: none; }
+                .toc a:hover { color: var(--accent); text-decoration: underline; }
                 h1 { font-size: 1.4rem; margin: 0; }
                 h2 { font-size: 1.05rem; margin: 0 0 .75rem; }
                 .badge { padding: .25rem .75rem; border-radius: 999px; font-weight: 600; font-size: .85rem; color: #fff; }
@@ -533,7 +800,11 @@ public class HtmlExplainabilityReportGenerator {
                     padding: 1rem 1.25rem; }
                 .summary .goal { margin: 0 0 .4rem; }
                 .summary .outcome { margin: 0 0 .4rem; color: var(--muted); }
-                .summary .recommendation { margin: .6rem 0 0; padding-top: .6rem; border-top: 1px solid var(--border); }
+                .recommendation-callout { background: color-mix(in srgb, var(--accent) 10%, var(--card));
+                    border: 1px solid var(--accent); border-radius: .5rem; padding: .85rem 1.25rem; }
+                .recommendation-label { font-size: .75rem; font-weight: 700; text-transform: uppercase;
+                    color: var(--accent); letter-spacing: .04em; margin-bottom: .3rem; }
+                .recommendation-text { font-size: .95rem; }
                 .stats { display: flex; flex-wrap: wrap; gap: .75rem; }
                 .tile { background: var(--card); border: 1px solid var(--border); border-radius: .5rem;
                     padding: .75rem 1rem; min-width: 120px; }
@@ -543,6 +814,11 @@ public class HtmlExplainabilityReportGenerator {
                 .caption { color: var(--muted); font-size: .8rem; margin: -.5rem 0 .75rem; }
                 .plan { padding-left: 1.25rem; }
                 .plan li { margin-bottom: .3rem; }
+                .page-checklist { list-style: none; padding: 0; margin: 0 0 1rem; font-size: .85rem; }
+                .page-checklist li { padding: .2rem 0; color: var(--success); }
+                .performance-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-top: 1rem; }
+                .performance-columns h3 { font-size: .9rem; margin: 0 0 .5rem; }
+                @media (max-width: 640px) { .performance-columns { grid-template-columns: 1fr; } }
                 .graph { width: 100%; max-width: 900px; height: auto; overflow: visible; }
                 .node circle { fill: var(--card); stroke: var(--accent); stroke-width: 2; }
                 .node text { fill: var(--fg); font-size: 13px; text-anchor: middle; }
@@ -569,6 +845,42 @@ public class HtmlExplainabilityReportGenerator {
                 .bar { display: inline-block; width: 60px; height: 6px; background: var(--border);
                     border-radius: 3px; overflow: hidden; vertical-align: middle; margin-right: .35rem; }
                 .bar-fill { height: 100%; background: var(--accent); }
+                .exec-facts { display: flex; flex-wrap: wrap; gap: 1.25rem; margin: .75rem 0 0;
+                    padding-top: .75rem; border-top: 1px solid var(--border); }
+                .exec-facts div { min-width: 90px; }
+                .exec-facts dt { font-size: .75rem; color: var(--muted); margin: 0; }
+                .exec-facts dd { font-size: 1.05rem; font-weight: 700; margin: .1rem 0 0; }
+                .learned-badge, .winner-badge { display: inline-block; font-size: .7rem; font-weight: 700;
+                    padding: .1rem .45rem; border-radius: 999px; text-transform: uppercase; }
+                .learned-badge { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+                .winner-badge { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
+                .timeline { list-style: none; margin: 0; padding: 0; position: relative; }
+                .timeline::before { content: ""; position: absolute; left: 5.5rem; top: 0; bottom: 0;
+                    width: 2px; background: var(--border); }
+                .timeline-event { position: relative; display: flex; align-items: flex-start;
+                    gap: .75rem; padding: .4rem 0; }
+                .timeline-time { flex: 0 0 5rem; text-align: right; font-size: .78rem; color: var(--muted);
+                    font-variant-numeric: tabular-nums; padding-top: .1rem; }
+                .timeline-dot { flex: 0 0 auto; width: 10px; height: 10px; border-radius: 999px;
+                    background: var(--muted); margin-top: .3rem; z-index: 1;
+                    box-shadow: 0 0 0 3px var(--bg); }
+                .timeline-event.mission-started .timeline-dot, .timeline-event.mission-finished .timeline-dot {
+                    background: var(--accent); }
+                .timeline-event.observation .timeline-dot { background: #0891b2; }
+                .timeline-event.reasoning .timeline-dot { background: var(--muted); }
+                .timeline-event.execution .timeline-dot { background: var(--success); }
+                .timeline-event.finding .timeline-dot { background: var(--high); }
+                .timeline-body { flex: 1 1 auto; }
+                .timeline-headline { font-size: .88rem; font-weight: 600; }
+                .timeline-event.finding .timeline-headline { color: var(--high); }
+                .timeline-detail { font-size: .8rem; color: var(--muted); margin-top: .1rem; }
+                .timeline-screenshot { max-width: 240px; border: 1px solid var(--border); border-radius: .35rem;
+                    margin-top: .4rem; display: block; }
+                .timeline-filter { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1rem; }
+                .timeline-filter button { font: inherit; font-size: .8rem; padding: .3rem .7rem;
+                    border-radius: 999px; border: 1px solid var(--border); background: var(--card);
+                    color: var(--fg); cursor: pointer; }
+                .timeline-filter button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
                 """;
     }
 
@@ -588,6 +900,18 @@ public class HtmlExplainabilityReportGenerator {
                     node.addEventListener('mouseleave', function () {
                         document.querySelectorAll('.node, .edge').forEach(function (el) {
                             el.classList.remove('dim');
+                        });
+                    });
+                });
+                document.querySelectorAll('.timeline-filter button').forEach(function (btn) {
+                    btn.addEventListener('click', function () {
+                        document.querySelectorAll('.timeline-filter button').forEach(function (b) {
+                            b.classList.remove('active');
+                        });
+                        btn.classList.add('active');
+                        var kind = btn.getAttribute('data-kind');
+                        document.querySelectorAll('.timeline-event').forEach(function (li) {
+                            li.style.display = (kind === 'all' || li.classList.contains(kind)) ? '' : 'none';
                         });
                     });
                 });

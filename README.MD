@@ -818,6 +818,75 @@ Verified live end-to-end against a fake server: the AI-generated plan appeared c
 
 ---
 
+## Sprint 34 — Reporting v2 (Complete, all 3 stages)
+
+Ground-up report redesign against a user-authored spec: the report alone should answer eight questions — mission, what the agent did, why each choice, what it discovered, what bugs it found, what it learned, how much of the app was explored, and what to do next. Explicitly frozen: `MissionEngine`, `Planner`, `DecisionEngine`, `GoalReasoner`, `LearningEngine`, `WorldModel`, `Observer`, `ActionScorer`, `ExecutionMemory` — reporting reads their output, never influences them.
+
+### Mission Timeline ⭐
+
+- ✅ The centerpiece: a chronological, replayable reconstruction of the whole run — Mission Started → Observed (with new-state/revisit detection) → Generated N candidates → Selected X, reason → Execution Successful/Failed → Findings → Mission Finished. New `TimelineEvent`/`TimelineEventKind`.
+- ✅ Built entirely from timestamps that already existed on existing records (`Observation.capturedAt`, `ReasoningStep.timestamp`, `Experience.createdAt`, `Finding.detectedAt`) — nothing is captured specially for the timeline, it's a pure reconstruction.
+- ✅ Getting accurate per-action Execution Successful/Failed (Findings alone only capture errors, not successes) required exposing `ExperienceRepository` outside `EngineFactory.create()` for the first time — a new `EngineFactory.CreatedEngine` return type bundling it with the `MissionEngine`. `EngineFactory` itself isn't on the frozen list (it's composition/wiring, not a reasoning component), so this was in scope.
+- ✅ Rendered as a real vertical timeline in the HTML report (color-coded dots per event kind, a connecting line) and as an indented chronological list in the text report.
+
+### Executive Summary & Statistics
+
+- ✅ Executive Summary redesigned: Mission, Duration, Result, Coverage, Findings, Bug Clusters, a one-line Learning teaser, and the Recommendation, all together at the top — "a manager should stop here."
+- ✅ Statistics Dashboard expanded to a full card grid: Actions Executed, Pages, States, Transitions, Coverage, Avg Confidence, Bug Count, Clusters, Duration.
+
+### Better Reasoning Visualization
+
+- ✅ A `learned` badge on any reasoning step or candidate whose confidence carries a Phase 2/3 learning adjustment — parsed from the existing reasoning text (a display-layer read, not a new field on `CandidateAction`, which stays untouched) — plus a `winner` badge marking the selected candidate in the HTML candidate comparison table.
+
+### Learning (teaser now, full section in Stage 2)
+
+- ✅ New `LearningSummary` (new vs. updated actions, confidence improved vs. declined this mission) — computed by reusing `DefaultPatternAnalyzer`'s own `ActionKey` grouping over the mission's `Experience` list, the same grouping `LearningEngine` itself uses internally, just read back afterward for display.
+
+13 new unit tests (`MissionReportDataTimelineTest`). Full suite: 183/183 passing (was 170/170) — including catching and fixing a genuinely flaky test along the way: an early version of the timeline test reused one frozen `Observation` object (one fixed timestamp) for both an initial visit and its revisit, so timestamp-based sorting could reorder events depending on clock resolution. Fixed by giving test observations explicit, strictly-increasing timestamps instead of relying on back-to-back `Instant.now()` calls.
+
+Verified live against saucedemo.com: the real generated report showed a genuinely readable, replayable timeline of a 3-step login (each step's reasoning, execution outcome, and timing visible in order), a correctly populated Executive Summary, and a "3 new, 0 updated action(s) — 3 improved, 0 declined" learning line — all consistent with the actual mission that ran.
+
+### Stage 2 — Coverage, Full Learning, Findings Dashboard, Recommendation Presentation
+
+- ✅ **Coverage visualization**: a "Pages" checklist (✓ per discovered page) alongside the existing per-page coverage bars — with an explicit note that there's no sitemap, so a page AEGIS never found simply can't appear as "not visited." No fabricated "expected pages" list.
+- ✅ **Full Learning section**: `LearningSummary` extended with `actionPerformance` — every distinct action this mission touched, sorted best-success-rate-first, reusing the exact same `PatternStatistics` `DefaultPatternAnalyzer` already computes internally. Rendered as ranked Best/Worst Performing Actions tables (top 3 each) in both formats.
+- ✅ **Findings Dashboard**: new `FindingCategory` enum (`JAVASCRIPT`, `NETWORK`, `NAVIGATION`, `TIMEOUT`, `STABILITY`, `OTHER`), mapping each `BugCluster`'s underlying signal type to a category. Deliberately excludes `ACCESSIBILITY`/`PERFORMANCE` from the category list — AEGIS has no detector for either, and labeling findings that way would be invented, not derived.
+- ✅ **Improved recommendation presentation**: pulled out of the Executive Summary paragraph into its own highlighted callout section right below it — presentation only, `RecommendationEngine`/`LlmRecommendationEngine` (Phase 8) untouched.
+- 4 new unit tests (`MissionReportDataStage2Test`). Full suite: 187/187 passing.
+
+Verified live against saucedemo.com with a real timeout finding present: Learning correctly showed 10 new experiences (9 confidence-increased, 1 reduced) and ranked the one failed action — `CLICK [id='inventory_sidebar_link']`, 0% success — at the top of Worst Performing Actions; the Findings Dashboard correctly filed that same finding under `TIMEOUT`.
+
+### Stage 3 — Screenshot Hooks, Interactive HTML, JSON Export
+
+- ✅ **Screenshot hooks**: `TimelineEvent` gains a nullable `screenshotPath` via a new 5-arg constructor — every existing 4-arg call site keeps compiling unchanged and gets `null` automatically. No live capture happens today (that would mean instrumenting `Observer` or the browser layer, both frozen); both report generators already render the path when one's present, so a future capture mechanism is purely additive from here.
+- ✅ **Interactive HTML**: a sticky table-of-contents nav (all 12 sections now have real `id` attributes) and a Mission Timeline filter — All / Observations / Reasoning / Executions / Findings toggle buttons, pure client-side JS, no new data.
+- ✅ **JSON export**: new `JsonReportGenerator`, same overload chain as the text/HTML generators. Built by hand with Jackson's tree API — the same low-level approach already used elsewhere in this codebase (`OpenAiCompatibleChatClient`, `LlmActionScorer`, `LlmMissionParser`) — rather than reflecting `MissionReportData` directly, which would need a new `jackson-datatype-jsr310` dependency and would leak internal Java shapes into what should be a stable, intentional export schema. `MissionRunner` now writes all three formats every run.
+- **PDF export — deliberately skipped.** The original ask flagged this as conditional ("if it still aligns with the roadmap"). A real PDF renderer means a real new dependency with licensing baggage (iText's current versions are AGPL/commercial; OpenHTMLtoPDF is LGPL) for something a browser's own "Print to PDF" already does for free against the self-contained HTML report. That's a worse trade than this project's own "no external dependencies" principle should accept for the marginal benefit.
+- 8 new unit tests (`TimelineEventTest`, `JsonReportGeneratorTest`). Full suite: 195/195 passing.
+
+Verified live against saucedemo.com: all three report formats (`.txt`/`.html`/`.json`) written successfully from one run; the JSON output parsed as valid JSON with correct mission/coverage/timeline/learning/recommendation data; the HTML table-of-contents and timeline filter both rendered correctly against all 12 section IDs.
+
+**Reporting v2 is complete** — all three stages, all eight of the original success-criteria questions (what was the mission, what did the agent do, why each choice, what it discovered, what bugs it found, what it learned, how much was explored, what to do next) answerable from the report alone, in three formats, without reading a single log line. Every frozen component (`MissionEngine`, `Planner`, `DecisionEngine`, `GoalReasoner`, `LearningEngine`, `WorldModel`, `Observer`, `ActionScorer`, `ExecutionMemory`) stayed untouched throughout.
+
+---
+
+## Sprint 35 — Phase 9: Self-Healing (Complete)
+
+All four roadmap goals — locator healing, a retry engine, dialog recovery, navigation recovery — land as one new `com.aegis.core.resilience` package that decorates `Browser`. `Browser` was confirmed *not* on the Stable Components list (unlike `Executor`/`ActionExecutor`/`ActionHandler` sitting above it, or `MissionEngine` above that), so every real consumer — `Observer`, the action handlers, `AnomalyDetector`, `DefaultMissionEngine` itself — gets this for free with zero changes: `Browser`'s contract (complete, or throw) is unchanged, only how often it throws. `EngineFactory` does the one-line wrap.
+
+- ✅ **Retry engine**: `SelfHealingBrowser` retries a failed element action or navigation call once, after a short delay, before giving up or attempting to heal.
+- ✅ **Locator healing**: new `LocatorHealer` — pure string logic, no DOM access, scoped to exactly the 3 locator shapes AEGIS itself generates (see `PlaywrightBrowser.buildBestLocator`). `[id='X']`/`[name='X']` heal to a substring match (`[id*='X']`, then `:nth-match([id*='X'], 1)` if that's still ambiguous) — covers the common real-world case of a framework appending a generated suffix to an otherwise-stable id. `:nth-match(tag, N)` heals to the neighboring indices — covers the DOM gaining or losing one matching element since the locator was generated. Anything else is left alone; there's nothing to heal.
+- ✅ **Navigation recovery**: the same retry-once treatment for `navigate`/`refresh`/`goBack` — no locator involved, just a transient-network-blip safety net.
+- ✅ **Dialog recovery**: `PlaywrightBrowser`'s dialog handler went from blanket-dismiss to type-aware — `prompt` now accepts a blank answer instead of dismissing (dismiss returns `null`, which aborts most prompt-gated flows outright; accepting `""` lets the flow continue while committing to nothing). `confirm`/`beforeunload` deliberately keep dismissing — auto-accepting those is a real-damage risk against a live site under test, an explicit safety call already made and documented; this phase adds intelligence only where it doesn't fight that. `alert` is unchanged.
+- ✅ Retry/heal attempts use a short, explicit bounded timeout rather than Playwright's full default wait: `Browser` gained additive default-method overloads (`click(locator, Duration)`, etc. — non-breaking, every existing caller is unaffected), implemented for real in `PlaywrightBrowser` via Playwright's per-call `Options.setTimeout`. The first attempt still pays the full default wait once, unchanged from today; only the bounded retry/heal attempts are short, so a genuinely-broken locator fails fast instead of stalling a mission for minutes.
+- 17 new unit tests (`LocatorHealerTest`, `SelfHealingBrowserTest` — the latter against a hand-written fake `Browser` proving the exact retry → heal → give-up-and-rethrow sequence, single-retry navigation, and that read-only/lifecycle calls pass straight through with no retry logic at all). Full suite: 212/212 passing.
+
+Verified live against a real Playwright browser and a real local page, not just the fake double: a button/input whose real `id` had gained a `-v2`-style suffix since the locator was generated — the exact locator genuinely fails against the live DOM, retries, heals to the substring-match candidate, and the click/type actually lands (confirmed via a real page-title mutation the element's own `onclick`/`oninput` triggers). A third scenario with an unhealable locator confirmed the give-up path correctly rethrows Playwright's own `TimeoutError` rather than swallowing it. Also re-ran the existing SauceDemo login mission end-to-end through the real `EngineFactory` wiring (now including `SelfHealingBrowser`) — still `SUCCESS`, confirming the happy path is unaffected.
+
+**This completes Phase 9 – Self-Healing.**
+
+---
+
 # Long-Term Vision
 
 AEGIS is not intended to replace Selenium or Playwright.

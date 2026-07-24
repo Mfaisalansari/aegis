@@ -8,9 +8,14 @@ import com.aegis.core.bug.RuleBasedBugExplainer;
 import com.aegis.core.bug.RuleBasedRecommendationEngine;
 import com.aegis.core.mission.MissionPlan;
 import com.aegis.core.mission.RuleBasedMissionPlanner;
+import com.aegis.core.reasoning.learning.DefaultPatternAnalyzer;
+import com.aegis.core.reasoning.learning.PatternStatistics;
 import com.aegis.core.reasoning.memory.StateSignature;
 import com.aegis.model.action.Action;
+import com.aegis.model.context.ExecutionState;
 import com.aegis.model.context.MissionContext;
+import com.aegis.model.experience.Experience;
+import com.aegis.model.experience.ExperienceOutcome;
 import com.aegis.model.finding.Finding;
 import com.aegis.model.mission.Mission;
 import com.aegis.model.mission.MissionStatus;
@@ -21,8 +26,11 @@ import com.aegis.model.reasoning.NavigationEdge;
 import com.aegis.model.reasoning.ReasoningStep;
 
 import java.net.URI;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -52,7 +60,13 @@ public record MissionReportData(
         List<BugCluster> bugClusters,
         Map<String, String> bugExplanations,
         String recommendation,
-        MissionPlan plan
+        MissionPlan plan,
+        List<TimelineEvent> timeline,
+        LearningSummary learningSummary,
+        Duration duration,
+        int actionsExecuted,
+        double averageConfidence,
+        Map<FindingCategory, List<BugCluster>> findingsByCategory
 ) {
 
     private static final Pattern URL_PATTERN = Pattern.compile("https?://\\S+");
@@ -100,6 +114,23 @@ public record MissionReportData(
             MissionContext context, MissionStatus status, BugExplainer explainer,
             RecommendationEngine recommender, MissionPlan plan) {
 
+        return from(context, status, explainer, recommender, plan, List.of());
+    }
+
+    /**
+     * The full overload: everything above, plus this mission's own
+     * Experience list (Reporting v2) — needed for the Mission Timeline's
+     * accurate per-action Execution Successful/Failed events (Findings
+     * alone only capture errors, not successes) and for the Learning
+     * summary. Pass List.of() (what every shorter overload above does)
+     * when no ExperienceRepository is available; the timeline and
+     * learning summary degrade gracefully rather than failing — no
+     * EXECUTION events, an empty LearningSummary.
+     */
+    public static MissionReportData from(
+            MissionContext context, MissionStatus status, BugExplainer explainer,
+            RecommendationEngine recommender, MissionPlan plan, List<Experience> experiences) {
+
         List<Observation> observations = context.getExecutionState().getObservations();
         List<Action> actions = context.getExecutionState().getActions();
 
@@ -128,6 +159,19 @@ public record MissionReportData(
         List<Finding> findings = context.getExecutionState().getFindings();
         List<BugCluster> bugClusters = new DefaultBugClusterAnalyzer().analyze(findings);
 
+        List<TimelineEvent> timeline = buildTimeline(context, experiences, status);
+
+        Instant endTime = timeline.isEmpty()
+                ? context.getExecutionState().getStartedAt()
+                : timeline.get(timeline.size() - 1).timestamp();
+
+        List<ReasoningStep> reasoningSteps = context.getExecutionState().getReasoningSteps();
+
+        double averageConfidence = reasoningSteps.stream()
+                .mapToDouble(step -> step.selected().confidence())
+                .average()
+                .orElse(0.0);
+
         return new MissionReportData(
                 mission.name(),
                 goalStatement(mission),
@@ -136,15 +180,190 @@ public record MissionReportData(
                 List.copyOf(states),
                 edges,
                 findings,
-                context.getExecutionState().getReasoningSteps(),
+                reasoningSteps,
                 computeCoverage(observations, actions),
                 computePageCoverage(observations, actions),
                 computeStateVisitCounts(observations),
                 bugClusters,
                 computeBugExplanations(bugClusters, explainer),
                 recommender.recommend(bugClusters, computeFallbackRecommendation(bugClusters)),
-                plan
+                plan,
+                timeline,
+                computeLearningSummary(experiences),
+                Duration.between(context.getExecutionState().getStartedAt(), endTime),
+                actions.size(),
+                averageConfidence,
+                categorizeFindings(bugClusters)
         );
+    }
+
+    /**
+     * Reporting v2 "Findings Dashboard": groups this mission's
+     * BugClusters (Phase 6) by what kind of problem they represent,
+     * rather than presenting them only as a flat, fingerprint-grouped
+     * list. Limited to categories AEGIS actually detects — see
+     * FindingCategory's own doc for why ACCESSIBILITY/PERFORMANCE aren't
+     * options here.
+     */
+    private static Map<FindingCategory, List<BugCluster>> categorizeFindings(List<BugCluster> bugClusters) {
+
+        Map<FindingCategory, List<BugCluster>> byCategory = new LinkedHashMap<>();
+
+        for (BugCluster cluster : bugClusters) {
+            byCategory.computeIfAbsent(categoryOf(cluster), key -> new ArrayList<>()).add(cluster);
+        }
+
+        return byCategory;
+    }
+
+    private static FindingCategory categoryOf(BugCluster cluster) {
+
+        String summary = cluster.representativeSummary();
+        String kind = summary.contains(":") ? summary.substring(0, summary.indexOf(':')) : summary;
+
+        return switch (kind) {
+            case "CRASH" -> FindingCategory.STABILITY;
+            case "PAGE_ERROR", "CONSOLE_ERROR" -> FindingCategory.JAVASCRIPT;
+            case "REQUEST_FAILED" -> FindingCategory.NETWORK;
+            case "DIALOG" -> FindingCategory.NAVIGATION;
+            case "Engine error" -> summary.toLowerCase().contains("timeout")
+                    ? FindingCategory.TIMEOUT
+                    : FindingCategory.NAVIGATION;
+            default -> FindingCategory.OTHER;
+        };
+    }
+
+    /**
+     * Reconstructed purely from data already recorded in ExecutionState
+     * (Observations, ReasoningSteps, Findings) plus this mission's
+     * Experiences — nothing here is captured live, it's a replay built
+     * after the fact from timestamps that already existed on each
+     * record (Observation.capturedAt, ReasoningStep.timestamp,
+     * Experience.createdAt, Finding.detectedAt). A "new state" flag on
+     * each observation event is computed the same way
+     * VisitedStateMemory does it internally, just recomputed here since
+     * that decision itself isn't persisted on the Observation record.
+     */
+    private static List<TimelineEvent> buildTimeline(
+            MissionContext context, List<Experience> experiences, MissionStatus status) {
+
+        ExecutionState state = context.getExecutionState();
+        List<TimelineEvent> events = new ArrayList<>();
+
+        events.add(new TimelineEvent(
+                state.getStartedAt(),
+                TimelineEventKind.MISSION_STARTED,
+                "Mission Started",
+                context.getMission().name()
+        ));
+
+        Set<String> discoveredStates = new HashSet<>();
+
+        for (Observation observation : state.getObservations()) {
+
+            boolean isNewState = discoveredStates.add(StateSignature.of(observation));
+
+            events.add(new TimelineEvent(
+                    observation.capturedAt(),
+                    TimelineEventKind.OBSERVATION,
+                    "Observed " + observation.url(),
+                    observation.elements().size() + " interactive element(s) — "
+                            + (isNewState ? "new state" : "revisiting a known state")
+            ));
+        }
+
+        for (ReasoningStep step : state.getReasoningSteps()) {
+
+            events.add(new TimelineEvent(
+                    step.timestamp(),
+                    TimelineEventKind.REASONING,
+                    "Generated " + step.candidates().size() + " candidate action(s)",
+                    null
+            ));
+
+            events.add(new TimelineEvent(
+                    step.timestamp(),
+                    TimelineEventKind.REASONING,
+                    "Selected " + step.selected().action().type() + " " + step.selected().action().target(),
+                    "Reason: " + step.selected().reasoning()
+            ));
+        }
+
+        for (Experience experience : experiences) {
+
+            Action action = experience.candidateAction().action();
+            boolean success = experience.outcome() == ExperienceOutcome.SUCCESS;
+
+            events.add(new TimelineEvent(
+                    experience.createdAt(),
+                    TimelineEventKind.EXECUTION,
+                    "Execution " + (success ? "Successful" : "Failed"),
+                    action.type() + " " + action.target()
+                            + " (" + experience.executionDuration().toMillis() + "ms)"
+            ));
+        }
+
+        for (Finding finding : state.getFindings()) {
+
+            events.add(new TimelineEvent(
+                    finding.detectedAt(),
+                    TimelineEventKind.FINDING,
+                    "Finding: " + finding.summary(),
+                    finding.severity().toString()
+            ));
+        }
+
+        events.sort(Comparator.comparing(TimelineEvent::timestamp));
+
+        Instant finishedAt = events.isEmpty() ? state.getStartedAt() : events.get(events.size() - 1).timestamp();
+
+        events.add(new TimelineEvent(
+                finishedAt,
+                TimelineEventKind.MISSION_FINISHED,
+                "Mission Finished",
+                "Result: " + status
+        ));
+
+        return events;
+    }
+
+    /**
+     * Reuses DefaultPatternAnalyzer's own ActionKey-based grouping
+     * (Phase 2) so "new" vs "updated" and "improved" vs "declined" agree
+     * exactly with what actually drove LearningEngine's confidence
+     * adjustments during this mission — a pure read of that same data,
+     * not a second, possibly-drifting computation of it.
+     */
+    private static LearningSummary computeLearningSummary(List<Experience> experiences) {
+
+        if (experiences.isEmpty()) {
+            return LearningSummary.empty();
+        }
+
+        Map<Action, PatternStatistics> patternStats = new DefaultPatternAnalyzer().analyze(experiences);
+
+        int newExperiences = (int) patternStats.values().stream()
+                .filter(stat -> stat.totalExecutions() == 1)
+                .count();
+
+        int updatedActions = (int) patternStats.values().stream()
+                .filter(stat -> stat.totalExecutions() > 1)
+                .count();
+
+        int confidenceIncreased = (int) patternStats.values().stream()
+                .filter(stat -> stat.successRate() >= 0.75)
+                .count();
+
+        int confidenceReduced = (int) patternStats.values().stream()
+                .filter(stat -> stat.successRate() < 0.50)
+                .count();
+
+        List<PatternStatistics> actionPerformance = patternStats.values().stream()
+                .sorted(Comparator.comparingDouble(PatternStatistics::successRate).reversed()
+                        .thenComparing(Comparator.comparingLong(PatternStatistics::totalExecutions).reversed()))
+                .toList();
+
+        return new LearningSummary(newExperiences, updatedActions, confidenceIncreased, confidenceReduced, actionPerformance);
     }
 
     private static Map<String, String> computeBugExplanations(List<BugCluster> bugClusters, BugExplainer explainer) {

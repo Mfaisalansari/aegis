@@ -12,6 +12,7 @@ import com.microsoft.playwright.options.WaitUntilState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -68,16 +69,31 @@ public class PlaywrightBrowser implements Browser {
          * dialogs (alert/confirm/prompt/beforeunload) — the action that
          * triggered one just appears to do nothing, with zero record of
          * why. This makes that visible (as an anomaly, same pipeline as
-         * console/page errors) and keeps dismissing by default: accepting
-         * would be needed to reach some flows (e.g. a "delete this?"
-         * confirm), but auto-accepting is a real-damage risk against a
-         * live site under test, so it's left conservative rather than
-         * optimizing for coverage.
+         * console/page errors).
+         *
+         * "prompt" is accepted with a blank answer rather than dismissed:
+         * dismiss() returns null to the calling script, which aborts most
+         * prompt-gated flows outright, so the agent could never explore
+         * past one. Accepting with "" still lets the flow continue while
+         * committing to nothing.
+         *
+         * "confirm"/"beforeunload" stay dismissed: accepting would be
+         * needed to reach some flows (e.g. a "delete this?" confirm), but
+         * auto-accepting is a real-damage risk against a live site under
+         * test, so those stay conservative rather than optimizing for
+         * coverage. "alert" has no real choice either way — dismiss() is
+         * kept for consistency with today's behavior.
          */
         page.onDialog(dialog -> {
+
             anomalies.add(new AnomalySignal(
                     "DIALOG", dialog.type() + ": " + dialog.message(), page.url(), Instant.now()));
-            dialog.dismiss();
+
+            if ("prompt".equals(dialog.type())) {
+                dialog.accept("");
+            } else {
+                dialog.dismiss();
+            }
         });
     }
 
@@ -140,8 +156,20 @@ public class PlaywrightBrowser implements Browser {
     }
 
     @Override
+    public void click(String locator, Duration timeout) {
+        page.locator(locator).click(new Locator.ClickOptions().setTimeout(timeout.toMillis()));
+        settle();
+    }
+
+    @Override
     public void doubleClick(String locator) {
         page.locator(locator).dblclick();
+        settle();
+    }
+
+    @Override
+    public void doubleClick(String locator, Duration timeout) {
+        page.locator(locator).dblclick(new Locator.DblclickOptions().setTimeout(timeout.toMillis()));
         settle();
     }
 
@@ -158,9 +186,22 @@ public class PlaywrightBrowser implements Browser {
     }
 
     @Override
-    public void select(String locator) {
+    public void type(String locator, String text, Duration timeout) {
+        page.locator(locator).fill(text, new Locator.FillOptions().setTimeout(timeout.toMillis()));
+        settle();
+    }
 
-        Locator select = page.locator(locator);
+    @Override
+    public void select(String locator) {
+        select(page.locator(locator), new Locator.SelectOptionOptions());
+    }
+
+    @Override
+    public void select(String locator, Duration timeout) {
+        select(page.locator(locator), new Locator.SelectOptionOptions().setTimeout(timeout.toMillis()));
+    }
+
+    private void select(Locator select, Locator.SelectOptionOptions options) {
 
         List<String> values = select.locator("option").all().stream()
                 .map(option -> option.getAttribute("value"))
@@ -168,7 +209,7 @@ public class PlaywrightBrowser implements Browser {
                 .toList();
 
         if (!values.isEmpty()) {
-            select.selectOption(values.get(0));
+            select.selectOption(values.get(0), options);
         }
 
         settle();
@@ -177,6 +218,12 @@ public class PlaywrightBrowser implements Browser {
     @Override
     public void scrollTo(String locator) {
         page.locator(locator).scrollIntoViewIfNeeded();
+    }
+
+    @Override
+    public void scrollTo(String locator, Duration timeout) {
+        page.locator(locator)
+                .scrollIntoViewIfNeeded(new Locator.ScrollIntoViewIfNeededOptions().setTimeout(timeout.toMillis()));
     }
 
     /**

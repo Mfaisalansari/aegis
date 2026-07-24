@@ -7,7 +7,6 @@ import com.aegis.core.bug.RecommendationEngine;
 import com.aegis.core.bug.RuleBasedBugExplainer;
 import com.aegis.core.bug.RuleBasedRecommendationEngine;
 import com.aegis.core.engine.EngineFactory;
-import com.aegis.core.engine.MissionEngine;
 import com.aegis.core.llm.OpenAiCompatibleChatClient;
 import com.aegis.core.mission.LlmMissionPlanner;
 import com.aegis.core.mission.MissionPlan;
@@ -15,6 +14,8 @@ import com.aegis.core.mission.MissionPlanner;
 import com.aegis.core.mission.RuleBasedMissionPlanner;
 import com.aegis.core.report.ExplainabilityReportGenerator;
 import com.aegis.core.report.HtmlExplainabilityReportGenerator;
+import com.aegis.core.report.JsonReportGenerator;
+import com.aegis.model.experience.Experience;
 import com.aegis.model.mission.Mission;
 import com.aegis.model.mission.MissionResult;
 
@@ -23,6 +24,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.List;
 
 /**
  * Shared entry-point logic: run a mission, write both report formats,
@@ -56,9 +58,16 @@ final class MissionRunner {
         plan.steps().forEach(step -> System.out.println("  - " + step));
         System.out.println();
 
-        MissionEngine engine = EngineFactory.create();
+        EngineFactory.CreatedEngine created = EngineFactory.create();
 
-        MissionResult result = engine.execute(mission);
+        MissionResult result = created.engine().execute(mission);
+
+        // Reporting v2's Mission Timeline (accurate per-action
+        // Execution Successful/Failed events) and Learning summary both
+        // read this mission's own Experience list — the same data
+        // LearningEngine already recorded during the run, just read
+        // back afterward rather than fed anywhere.
+        List<Experience> experiences = created.experienceRepository().findByMission(mission);
 
         long timestamp = Instant.now().toEpochMilli();
 
@@ -72,16 +81,23 @@ final class MissionRunner {
 
         Path textReportPath = writeReport(
                 new ExplainabilityReportGenerator()
-                        .generate(result.context(), result.status(), bugExplainer, recommender, plan),
+                        .generate(result.context(), result.status(), bugExplainer, recommender, plan, experiences),
                 timestamp,
                 "txt"
         );
 
         Path htmlReportPath = writeReport(
                 new HtmlExplainabilityReportGenerator()
-                        .generate(result.context(), result.status(), bugExplainer, recommender, plan),
+                        .generate(result.context(), result.status(), bugExplainer, recommender, plan, experiences),
                 timestamp,
                 "html"
+        );
+
+        Path jsonReportPath = writeReport(
+                new JsonReportGenerator()
+                        .generate(result.context(), result.status(), bugExplainer, recommender, plan, experiences),
+                timestamp,
+                "json"
         );
 
         System.out.println();
@@ -90,6 +106,7 @@ final class MissionRunner {
         System.out.println("Status     : " + result.status());
         System.out.println("Report     : " + textReportPath);
         System.out.println("HTML Report: " + htmlReportPath);
+        System.out.println("JSON Report: " + jsonReportPath);
         System.out.println("=================================");
     }
 

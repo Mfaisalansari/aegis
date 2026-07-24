@@ -17,6 +17,7 @@ import com.aegis.core.anomaly.BrowserSignalAnomalyDetector;
 import com.aegis.core.browser.Browser;
 import com.aegis.core.browser.playwright.PlaywrightBrowser;
 import com.aegis.core.llm.OpenAiCompatibleChatClient;
+import com.aegis.core.resilience.SelfHealingBrowser;
 import com.aegis.core.controller.DefaultMissionController;
 import com.aegis.core.decision.DecisionEngine;
 import com.aegis.core.decision.RuleBasedDecisionEngine;
@@ -82,12 +83,32 @@ public final class EngineFactory {
     private EngineFactory() {
     }
 
-    public static MissionEngine create() {
+    /**
+     * What create() hands back: the engine to run a mission with, plus
+     * the ExperienceRepository that engine's own LearningEngine writes
+     * to during the run — needed by Reporting v2's Mission Timeline
+     * (accurate per-action Success/Failed events) and Learning summary,
+     * neither of which existed as a report-time concern when create()
+     * only needed to return a MissionEngine. Reporting reads this after
+     * the mission finishes; nothing about how the engine itself behaves
+     * changes.
+     */
+    public record CreatedEngine(MissionEngine engine, ExperienceRepository experienceRepository) {
+    }
+
+    public static CreatedEngine create() {
 
         /*
          * Browser
+         *
+         * Wrapped in SelfHealingBrowser (Phase 9) so every downstream
+         * consumer below — Observer, the action handlers, AnomalyDetector,
+         * DefaultMissionEngine itself — gets retry/locator-healing/
+         * navigation-recovery for free, with zero changes to any of them:
+         * Browser's contract (complete, or throw) is unchanged, only how
+         * often it throws.
          */
-        Browser browser = new PlaywrightBrowser();
+        Browser browser = new SelfHealingBrowser(new PlaywrightBrowser());
         browser.launch();
 
         /*
@@ -319,7 +340,7 @@ public final class EngineFactory {
         /*
          * Mission Engine
          */
-        return new DefaultMissionEngine(
+        MissionEngine engine = new DefaultMissionEngine(
                 browser,
                 observer,
                 planner,
@@ -331,5 +352,7 @@ public final class EngineFactory {
                 worldModel,
                 experienceRecorder
         );
+
+        return new CreatedEngine(engine, experienceRepository);
     }
 }
