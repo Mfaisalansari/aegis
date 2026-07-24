@@ -11,6 +11,7 @@ import com.aegis.core.mission.RuleBasedMissionPlanner;
 import com.aegis.core.reasoning.learning.DefaultPatternAnalyzer;
 import com.aegis.core.reasoning.learning.PatternStatistics;
 import com.aegis.core.reasoning.memory.StateSignature;
+import com.aegis.core.resilience.ScreenshotSample;
 import com.aegis.model.action.Action;
 import com.aegis.model.context.ExecutionState;
 import com.aegis.model.context.MissionContext;
@@ -29,6 +30,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -70,6 +72,12 @@ public record MissionReportData(
 ) {
 
     private static final Pattern URL_PATTERN = Pattern.compile("https?://\\S+");
+
+    /**
+     * Best-effort correlation tolerance between a captured screenshot
+     * and the Experience it's matched to — see nearestScreenshotDataUri.
+     */
+    private static final Duration SCREENSHOT_MATCH_TOLERANCE = Duration.ofSeconds(1);
 
     public static MissionReportData from(MissionContext context, MissionStatus status) {
         return from(context, status, new RuleBasedBugExplainer(), new RuleBasedRecommendationEngine());
@@ -118,18 +126,36 @@ public record MissionReportData(
     }
 
     /**
-     * The full overload: everything above, plus this mission's own
-     * Experience list (Reporting v2) — needed for the Mission Timeline's
-     * accurate per-action Execution Successful/Failed events (Findings
-     * alone only capture errors, not successes) and for the Learning
-     * summary. Pass List.of() (what every shorter overload above does)
-     * when no ExperienceRepository is available; the timeline and
-     * learning summary degrade gracefully rather than failing — no
-     * EXECUTION events, an empty LearningSummary.
+     * Same as the 5-arg overload, plus this mission's own Experience list
+     * (Reporting v2) — needed for the Mission Timeline's accurate
+     * per-action Execution Successful/Failed events (Findings alone only
+     * capture errors, not successes) and for the Learning summary. Pass
+     * List.of() (what every shorter overload above does) when no
+     * ExperienceRepository is available; the timeline and learning
+     * summary degrade gracefully rather than failing — no EXECUTION
+     * events, an empty LearningSummary. No screenshots either — see the
+     * 7-arg overload below for those.
      */
     public static MissionReportData from(
             MissionContext context, MissionStatus status, BugExplainer explainer,
             RecommendationEngine recommender, MissionPlan plan, List<Experience> experiences) {
+
+        return from(context, status, explainer, recommender, plan, experiences, List.of());
+    }
+
+    /**
+     * The full overload: everything above, plus every screenshot
+     * SelfHealingBrowser captured this run (a v1.1 follow-up to
+     * Reporting v2's screenshot hook) — matched to the nearest EXECUTION
+     * timeline event by timestamp in buildTimeline(). Pass List.of() (what
+     * every shorter overload above does) when none were captured; the
+     * timeline just has no screenshotDataUri on any event, same as
+     * before this existed.
+     */
+    public static MissionReportData from(
+            MissionContext context, MissionStatus status, BugExplainer explainer,
+            RecommendationEngine recommender, MissionPlan plan, List<Experience> experiences,
+            List<ScreenshotSample> screenshots) {
 
         List<Observation> observations = context.getExecutionState().getObservations();
         List<Action> actions = context.getExecutionState().getActions();
@@ -159,7 +185,7 @@ public record MissionReportData(
         List<Finding> findings = context.getExecutionState().getFindings();
         List<BugCluster> bugClusters = new DefaultBugClusterAnalyzer().analyze(findings);
 
-        List<TimelineEvent> timeline = buildTimeline(context, experiences, status);
+        List<TimelineEvent> timeline = buildTimeline(context, experiences, status, screenshots);
 
         Instant endTime = timeline.isEmpty()
                 ? context.getExecutionState().getStartedAt()
@@ -245,7 +271,8 @@ public record MissionReportData(
      * that decision itself isn't persisted on the Observation record.
      */
     private static List<TimelineEvent> buildTimeline(
-            MissionContext context, List<Experience> experiences, MissionStatus status) {
+            MissionContext context, List<Experience> experiences, MissionStatus status,
+            List<ScreenshotSample> screenshots) {
 
         ExecutionState state = context.getExecutionState();
         List<TimelineEvent> events = new ArrayList<>();
@@ -299,7 +326,8 @@ public record MissionReportData(
                     TimelineEventKind.EXECUTION,
                     "Execution " + (success ? "Successful" : "Failed"),
                     action.type() + " " + action.target()
-                            + " (" + experience.executionDuration().toMillis() + "ms)"
+                            + " (" + experience.executionDuration().toMillis() + "ms)",
+                    nearestScreenshotDataUri(experience.createdAt(), screenshots)
             ));
         }
 
@@ -325,6 +353,38 @@ public record MissionReportData(
         ));
 
         return events;
+    }
+
+    /**
+     * Best-effort correlation, not an exact link: SelfHealingBrowser
+     * captures a screenshot immediately after each action completes, in
+     * the same synchronous call as the Experience gets recorded, so the
+     * two timestamps are normally milliseconds apart — but there's no
+     * shared identifier tying a specific capture to a specific
+     * Experience, only proximity in time. Capped at 1 second so a WAIT
+     * action (which never touches the browser, so has no screenshot of
+     * its own) doesn't silently borrow a nearby real action's capture.
+     */
+    private static String nearestScreenshotDataUri(Instant at, List<ScreenshotSample> screenshots) {
+
+        ScreenshotSample nearest = null;
+        Duration nearestDistance = null;
+
+        for (ScreenshotSample sample : screenshots) {
+
+            Duration distance = Duration.between(sample.capturedAt(), at).abs();
+
+            if (nearestDistance == null || distance.compareTo(nearestDistance) < 0) {
+                nearest = sample;
+                nearestDistance = distance;
+            }
+        }
+
+        if (nearest == null || nearestDistance.compareTo(SCREENSHOT_MATCH_TOLERANCE) > 0) {
+            return null;
+        }
+
+        return "data:image/png;base64," + Base64.getEncoder().encodeToString(nearest.pngBytes());
     }
 
     /**

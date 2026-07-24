@@ -72,7 +72,7 @@ class JsonReportGeneratorTest {
         assertTrue(timeline.isArray());
         assertTrue(timeline.size() >= 2);
         assertEquals("MISSION_STARTED", timeline.get(0).path("kind").asText());
-        assertTrue(timeline.get(0).path("screenshotPath").isNull());
+        assertTrue(timeline.get(0).path("screenshotDataUri").isNull());
     }
 
     @Test

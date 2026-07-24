@@ -106,6 +106,11 @@ public class PlaywrightBrowser implements Browser {
     }
 
     @Override
+    public byte[] screenshotPng() {
+        return page.screenshot();
+    }
+
+    @Override
     public void close() {
 
         if (browser != null) {

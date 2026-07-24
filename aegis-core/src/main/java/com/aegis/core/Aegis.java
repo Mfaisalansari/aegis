@@ -15,6 +15,7 @@ import com.aegis.core.mission.RuleBasedMissionPlanner;
 import com.aegis.core.report.ExplainabilityReportGenerator;
 import com.aegis.core.report.HtmlExplainabilityReportGenerator;
 import com.aegis.core.report.JsonReportGenerator;
+import com.aegis.core.resilience.ScreenshotSample;
 import com.aegis.model.experience.Experience;
 import com.aegis.model.mission.Mission;
 import com.aegis.model.mission.MissionResult;
@@ -54,6 +55,7 @@ public final class Aegis {
         MissionResult result = created.engine().execute(mission);
 
         List<Experience> experiences = created.experienceRepository().findByMission(mission);
+        List<ScreenshotSample> screenshots = created.screenshots().get();
 
         BugExplainer bugExplainer = bugExplanationsEnabled()
                 ? new LlmBugExplainer(OpenAiCompatibleChatClient.fromEnvironment())
@@ -64,13 +66,13 @@ public final class Aegis {
                 : new RuleBasedRecommendationEngine();
 
         String textReport = new ExplainabilityReportGenerator()
-                .generate(result.context(), result.status(), bugExplainer, recommender, plan, experiences);
+                .generate(result.context(), result.status(), bugExplainer, recommender, plan, experiences, screenshots);
 
         String htmlReport = new HtmlExplainabilityReportGenerator()
-                .generate(result.context(), result.status(), bugExplainer, recommender, plan, experiences);
+                .generate(result.context(), result.status(), bugExplainer, recommender, plan, experiences, screenshots);
 
         String jsonReport = new JsonReportGenerator()
-                .generate(result.context(), result.status(), bugExplainer, recommender, plan, experiences);
+                .generate(result.context(), result.status(), bugExplainer, recommender, plan, experiences, screenshots);
 
         return new AegisReport(result, plan, textReport, htmlReport, jsonReport);
     }

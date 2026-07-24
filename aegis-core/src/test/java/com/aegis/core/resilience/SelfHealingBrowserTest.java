@@ -158,6 +158,57 @@ class SelfHealingBrowserTest {
         assertEquals(List.of("getPageTitle"), fake.calls);
     }
 
+    @Test
+    void capturesOneScreenshotPerSuccessfulElementActionAndNavigation() {
+
+        RecordingBrowser fake = new RecordingBrowser();
+        fake.screenshotBytes = new byte[]{1, 2, 3};
+
+        SelfHealingBrowser browser = new SelfHealingBrowser(fake, NO_DELAY, RETRY_TIMEOUT);
+        browser.click("[id='submit']");
+        browser.navigate("https://example.com");
+
+        assertEquals(2, browser.capturedScreenshots().size());
+    }
+
+    @Test
+    void stillCapturesAScreenshotWhenTheActionUltimatelyFails() {
+
+        RecordingBrowser fake = new RecordingBrowser();
+        fake.screenshotBytes = new byte[]{1, 2, 3};
+        fake.clickShouldFail = locator -> true;
+
+        SelfHealingBrowser browser = new SelfHealingBrowser(fake, NO_DELAY, RETRY_TIMEOUT);
+
+        assertThrows(RuntimeException.class, () -> browser.click("text=Sign in"));
+
+        assertEquals(1, browser.capturedScreenshots().size());
+    }
+
+    @Test
+    void capturesNothingWhenTheDelegateHasNoScreenshotSupport() {
+
+        RecordingBrowser fake = new RecordingBrowser();
+
+        SelfHealingBrowser browser = new SelfHealingBrowser(fake, NO_DELAY, RETRY_TIMEOUT);
+        browser.click("[id='submit']");
+
+        assertTrue(browser.capturedScreenshots().isEmpty());
+    }
+
+    @Test
+    void aScreenshotCaptureFailureDoesNotMaskTheActionsOwnOutcome() {
+
+        RecordingBrowser fake = new RecordingBrowser();
+        fake.screenshotPngThrows = true;
+
+        SelfHealingBrowser browser = new SelfHealingBrowser(fake, NO_DELAY, RETRY_TIMEOUT);
+
+        browser.click("[id='submit']");
+
+        assertTrue(browser.capturedScreenshots().isEmpty());
+    }
+
     private static final class RecordingBrowser implements Browser {
 
         final List<String> calls = new ArrayList<>();
@@ -168,6 +219,8 @@ class SelfHealingBrowserTest {
         int navigateFailuresRemaining = 0;
         boolean getPageTitleAlwaysFails = false;
         String lastTypeText;
+        byte[] screenshotBytes = new byte[0];
+        boolean screenshotPngThrows = false;
 
         private boolean clickFails(String locator) {
 
@@ -319,6 +372,16 @@ class SelfHealingBrowserTest {
         public List<AnomalySignal> drainAnomalies() {
             calls.add("drainAnomalies");
             return List.of();
+        }
+
+        @Override
+        public byte[] screenshotPng() {
+
+            if (screenshotPngThrows) {
+                throw new RuntimeException("screenshot capture failed");
+            }
+
+            return screenshotBytes;
         }
     }
 }

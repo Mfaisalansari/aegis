@@ -7,23 +7,23 @@ import java.time.Instant;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
-/** Reporting v2 Stage 3 "screenshot hooks": always null today, but a real path can be carried once populated. */
+/** Screenshot hook: null unless MissionReportData.buildTimeline matched a captured screenshot. */
 class TimelineEventTest {
 
     @Test
-    void fourArgConstructorDefaultsScreenshotPathToNull() {
+    void fourArgConstructorDefaultsScreenshotDataUriToNull() {
 
         TimelineEvent event = new TimelineEvent(Instant.now(), TimelineEventKind.OBSERVATION, "headline", "detail");
 
-        assertNull(event.screenshotPath());
+        assertNull(event.screenshotDataUri());
     }
 
     @Test
-    void fiveArgConstructorCarriesAnExplicitScreenshotPath() {
+    void fiveArgConstructorCarriesAnExplicitScreenshotDataUri() {
 
         TimelineEvent event = new TimelineEvent(
-                Instant.now(), TimelineEventKind.EXECUTION, "headline", "detail", "/tmp/screenshot.png");
+                Instant.now(), TimelineEventKind.EXECUTION, "headline", "detail", "data:image/png;base64,AAAA");
 
-        assertEquals("/tmp/screenshot.png", event.screenshotPath());
+        assertEquals("data:image/png;base64,AAAA", event.screenshotDataUri());
     }
 }

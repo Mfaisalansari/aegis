@@ -903,6 +903,22 @@ Also bumped every module's Maven version from `0.1.0-SNAPSHOT` to `1.0.0-SNAPSHO
 
 ---
 
+## Sprint 37 — Real Screenshot Capture (Complete)
+
+First item off the "Next Milestone" list from Sprint 36 — not one of the original 10 phases. Reporting v2 (Phase 7) shipped `TimelineEvent.screenshotPath` as a data-model-only hook, always `null`, because live capture meant instrumenting the browser layer — assumed frozen at the time alongside `Observer`. Phase 9 (Self-Healing) later proved `Browser` specifically isn't on the Stable Components list, which is what makes this possible.
+
+- ✅ `Browser` gained an additive `screenshotPng()` default method; `PlaywrightBrowser` implements it for real via `page.screenshot()`.
+- ✅ `SelfHealingBrowser` — already the one layer every browser call flows through — now captures a screenshot after every element action and navigation call, success or failure (via try/finally, so a capture failure never masks the real outcome), exposed via a new `capturedScreenshots()`.
+- ✅ `EngineFactory.CreatedEngine` gained a third field (`Supplier<List<ScreenshotSample>>`), read by `Aegis.run()` after execution finishes, same pattern as the existing `experienceRepository` field.
+- ✅ `MissionReportData.buildTimeline` matches each Execution event to its nearest captured screenshot by timestamp (1-second tolerance — keeps a WAIT action, which never touches the browser, from borrowing a neighbor's capture). Deliberately scoped to Execution events only: an observation/reasoning/finding event has no specific browser action to capture against, so giving it a screenshot would imply a causal link that isn't real.
+- ✅ Renamed `screenshotPath` → `screenshotDataUri`, now a real `data:image/png;base64,...` URI instead of a (never-populated) filesystem path — required for the HTML report to stay self-contained now that this is actually populated. Safe to rename: `TimelineEvent` was never part of the v1.0 public API promise.
+- ✅ Text report shows a short placeholder instead of the raw base64 (would make a grep/diff-oriented format unreadable); HTML renders a real inline `<img>`; JSON carries the full data URI.
+- 8 new unit tests. Full suite: 221/221 passing.
+
+Verified live against a real saucedemo.com run: all 3 Execution events got a matched screenshot (100% match rate, zero orphans), zero non-Execution events got one, and an extracted screenshot was confirmed a genuine, valid PNG — correct magic bytes, visually the real saucedemo.com login page.
+
+---
+
 # Long-Term Vision
 
 AEGIS is not intended to replace Selenium or Playwright.
@@ -968,10 +984,10 @@ v1.0.0-SNAPSHOT
 
 Current State
 
-**Rule-Based Autonomous QA Agent, with five independent opt-in AI-assisted decision points** (`explorationStrategy: llm` candidate scoring, mission-plan preview, bug explanation, recommendation, natural-language mission parsing — see Phase 8), plus adaptive/coverage-aware exploration, self-healing execution, and a stable public API (`Aegis.run(Mission)` in `aegis-core`). Every roadmap phase (0 through 10) is complete.
+**Rule-Based Autonomous QA Agent, with five independent opt-in AI-assisted decision points** (`explorationStrategy: llm` candidate scoring, mission-plan preview, bug explanation, recommendation, natural-language mission parsing — see Phase 8), plus adaptive/coverage-aware exploration, self-healing execution with real live screenshot capture, and a stable public API (`Aegis.run(Mission)` in `aegis-core`). Every roadmap phase (0 through 10) is complete, plus one post-v1.0 addition (Sprint 37).
 
 Honest framing, unchanged from every earlier sprint's own discipline: rule-based is still the *default* everywhere, not AI. Every LLM-backed feature is opt-in, falls back to a deterministic rule-based implementation on any failure, and candidate generation/input values/anomaly classification stay fully deterministic. "AEGIS v1.0" means the roadmap's original six deliverables are real and shipped — it doesn't mean AI-by-default; that would be a different, larger milestone this project hasn't taken on.
 
 Next Milestone
 
-Not yet chosen — every phase this roadmap named is done. Real candidates for a v1.1+ direction (none started, none promised): an AI-backed decision-maker as the *default* rather than an opt-in strategy; cross-run experience persistence (today's `ExecutionMemory`/`WorldModel`/`ExperienceRepository` are explicitly in-run only, see `ARCHITECTURE.md`); real screenshot capture behind Reporting v2's existing hook; a published/tagged release now that the version line has moved to `1.0.0-SNAPSHOT`.
+Not yet chosen — every phase this roadmap named is done, and real screenshot capture (Sprint 37) is done too. Remaining real candidates for a v1.1+ direction (none started, none promised): an AI-backed decision-maker as the *default* rather than an opt-in strategy; cross-run experience persistence (today's `ExecutionMemory`/`WorldModel`/`ExperienceRepository` are explicitly in-run only, see `ARCHITECTURE.md`); a published/tagged release now that the version line has moved to `1.0.0-SNAPSHOT`.

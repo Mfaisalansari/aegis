@@ -8,6 +8,7 @@ import com.aegis.core.bug.RuleBasedRecommendationEngine;
 import com.aegis.core.mission.MissionPlan;
 import com.aegis.core.mission.RuleBasedMissionPlanner;
 import com.aegis.core.reasoning.learning.PatternStatistics;
+import com.aegis.core.resilience.ScreenshotSample;
 import com.aegis.model.context.MissionContext;
 import com.aegis.model.experience.Experience;
 import com.aegis.model.finding.Finding;
@@ -60,8 +61,17 @@ public class JsonReportGenerator {
     public String generate(
             MissionContext context, MissionStatus status, BugExplainer explainer,
             RecommendationEngine recommender, MissionPlan plan, List<Experience> experiences) {
+        return generate(context, status, explainer, recommender, plan, experiences, List.of());
+    }
 
-        MissionReportData data = MissionReportData.from(context, status, explainer, recommender, plan, experiences);
+    /** Full export: everything above, plus every screenshot SelfHealingBrowser captured this run. */
+    public String generate(
+            MissionContext context, MissionStatus status, BugExplainer explainer,
+            RecommendationEngine recommender, MissionPlan plan, List<Experience> experiences,
+            List<ScreenshotSample> screenshots) {
+
+        MissionReportData data =
+                MissionReportData.from(context, status, explainer, recommender, plan, experiences, screenshots);
 
         try {
             return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(toJson(data));
@@ -120,7 +130,7 @@ public class JsonReportGenerator {
             eventNode.put("kind", event.kind().toString());
             eventNode.put("headline", event.headline());
             eventNode.put("detail", event.detail());
-            eventNode.put("screenshotPath", event.screenshotPath());
+            eventNode.put("screenshotDataUri", event.screenshotDataUri());
         }
 
         root.set("learning", learningToJson(data));

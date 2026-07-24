@@ -17,6 +17,7 @@ import com.aegis.core.anomaly.BrowserSignalAnomalyDetector;
 import com.aegis.core.browser.Browser;
 import com.aegis.core.browser.playwright.PlaywrightBrowser;
 import com.aegis.core.llm.OpenAiCompatibleChatClient;
+import com.aegis.core.resilience.ScreenshotSample;
 import com.aegis.core.resilience.SelfHealingBrowser;
 import com.aegis.core.controller.DefaultMissionController;
 import com.aegis.core.decision.DecisionEngine;
@@ -77,6 +78,7 @@ import com.aegis.core.world.WorldModel;
 
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 public final class EngineFactory {
 
@@ -84,16 +86,22 @@ public final class EngineFactory {
     }
 
     /**
-     * What create() hands back: the engine to run a mission with, plus
-     * the ExperienceRepository that engine's own LearningEngine writes
-     * to during the run — needed by Reporting v2's Mission Timeline
-     * (accurate per-action Success/Failed events) and Learning summary,
-     * neither of which existed as a report-time concern when create()
-     * only needed to return a MissionEngine. Reporting reads this after
-     * the mission finishes; nothing about how the engine itself behaves
-     * changes.
+     * What create() hands back: the engine to run a mission with, the
+     * ExperienceRepository that engine's own LearningEngine writes to
+     * during the run (needed by Reporting v2's Mission Timeline and
+     * Learning summary), and a way to read back every screenshot
+     * SelfHealingBrowser captured during the run (needed by the Mission
+     * Timeline's screenshot hooks). All three are read *after* the
+     * mission finishes — create() itself runs before execute() is even
+     * called, so at this point the repository is still empty and no
+     * screenshots have been taken yet. Nothing about how the engine
+     * itself behaves changes; reporting only reads what already
+     * happened.
      */
-    public record CreatedEngine(MissionEngine engine, ExperienceRepository experienceRepository) {
+    public record CreatedEngine(
+            MissionEngine engine,
+            ExperienceRepository experienceRepository,
+            Supplier<List<ScreenshotSample>> screenshots) {
     }
 
     public static CreatedEngine create() {
@@ -108,7 +116,8 @@ public final class EngineFactory {
          * Browser's contract (complete, or throw) is unchanged, only how
          * often it throws.
          */
-        Browser browser = new SelfHealingBrowser(new PlaywrightBrowser());
+        SelfHealingBrowser selfHealingBrowser = new SelfHealingBrowser(new PlaywrightBrowser());
+        Browser browser = selfHealingBrowser;
         browser.launch();
 
         /*
@@ -353,6 +362,6 @@ public final class EngineFactory {
                 experienceRecorder
         );
 
-        return new CreatedEngine(engine, experienceRepository);
+        return new CreatedEngine(engine, experienceRepository, selfHealingBrowser::capturedScreenshots);
     }
 }

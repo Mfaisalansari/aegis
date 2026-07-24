@@ -367,6 +367,32 @@ Also bumped every module's Maven version from `0.1.0-SNAPSHOT` to `1.0.0-SNAPSHO
 
 ---
 
+# 🟢 Post-v1.0 — Real Screenshot Capture
+
+## Status
+
+Completed (2026-07-25)
+
+## Note
+
+Not one of the original 10 phases — this is the first item picked off README's "Next Milestone" candidate list after v1.0. Reporting v2 (Phase 7) shipped `TimelineEvent.screenshotDataUri` (then named `screenshotPath`) as a data-model-only hook, deliberately not wired to live capture at the time because that meant instrumenting the browser layer, and at the time of Reporting v2 the working assumption was that layer was frozen along with `Observer`. Phase 9 (Self-Healing) later established that `Browser` specifically is *not* on the Stable Components list — only `Observer` is — which is what makes this possible without an architecture review.
+
+## What shipped
+
+- `Browser` gained an additive `screenshotPng()` default method (empty array = unsupported), implemented for real in `PlaywrightBrowser` via `page.screenshot()`.
+- `SelfHealingBrowser` (already the one non-frozen layer every browser call flows through, per Phase 9) now captures one screenshot after every element action and navigation call — success or failure, via try/finally — exposed via a new `capturedScreenshots()` method. A capture failure never masks the real action's own outcome.
+- `EngineFactory.CreatedEngine` gained a third field, `Supplier<List<ScreenshotSample>> screenshots`, read by `Aegis.run()` after `execute()` finishes — same "populated during execution, read after" pattern already established for `experienceRepository`.
+- `MissionReportData.buildTimeline` matches each EXECUTION event to its nearest captured screenshot by timestamp (1-second tolerance, so a WAIT action — which never touches the browser — doesn't silently borrow a neighboring action's capture). Only EXECUTION events get one; observation/reasoning/finding/mission-start/finish events have no specific browser action to capture against, so attaching one there would overclaim a causal link that isn't real.
+- Renamed `TimelineEvent.screenshotPath` → `screenshotDataUri` and changed its content from a (never-populated) filesystem path to a real `data:image/png;base64,...` URI — necessary for the HTML report's "self-contained, no external assets" requirement to still hold once this was actually populated. Safe to rename: `TimelineEvent` was never part of the v1.0 public API promise (only `Mission`/`Aegis`/`AegisReport`/`MissionResult`/the report generators' `generate(...)` methods are).
+- Text report shows a short `[screenshot captured — see HTML/JSON report]` note instead of the raw data URI — a full base64 PNG inline would make a format meant for grepping/diffing unreadable. HTML renders a real `<img>`. JSON carries the full data URI under `timeline[].screenshotDataUri`.
+- 8 new unit tests (4 in `SelfHealingBrowserTest` covering capture-on-success/failure/no-support/capture-failure-doesn't-mask-outcome; 4 in new `MissionReportDataScreenshotTest` covering nearest-match, tolerance cutoff, closest-of-multiple, and that non-EXECUTION events never get one). Full suite: 221/221 passing.
+
+## Verification
+
+Live-verified against a real saucedemo.com run: all 3 EXECUTION events in that run's timeline got a matched real screenshot (100% match rate, zero orphans), zero non-EXECUTION events got one, and one extracted screenshot was confirmed to be a genuine, valid PNG (correct magic bytes, visually a real saucedemo.com login page) — not placeholder or corrupt data. Confirmed the JSON export carries the full data URI and the HTML report's `<img>` tag renders it inline; the text report correctly shows the short placeholder instead of a multi-hundred-KB inline blob.
+
+---
+
 # Current Sprint
 
 ## Sprint Goal

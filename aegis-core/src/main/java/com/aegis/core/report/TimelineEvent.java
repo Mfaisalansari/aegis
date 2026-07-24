@@ -12,20 +12,23 @@ import java.time.Instant;
  * Experience.createdAt, Finding.detectedAt) — reporting reconstructs a
  * timeline, it doesn't get fed one.
  *
- * screenshotPath is Stage 3's "screenshot hook": always null today —
- * actually capturing a screenshot at the right moment would mean
- * instrumenting the live execution path (Observer or the browser
- * layer), both frozen — but every event already has a well-defined
- * moment and a place to put a path once that capture mechanism exists.
- * The 4-arg constructor is what every event is built with today; the
- * 5-arg one is the hook.
+ * screenshotDataUri is the one exception: real screenshots (Phase 9+
+ * follow-up), captured live by SelfHealingBrowser (the browser layer
+ * isn't frozen, unlike Observer) after every EXECUTION event's action,
+ * matched back to the nearest EXECUTION event by timestamp — see
+ * MissionReportData.buildTimeline. A full "data:image/png;base64,..."
+ * URI, not a filesystem path, so the HTML report stays self-contained
+ * with no external assets. Every other event kind (observations,
+ * reasoning, findings, mission start/finish) has no direct browser
+ * action to capture against, so this stays null for those — the 4-arg
+ * constructor is what they're built with.
  */
 public record TimelineEvent(
         Instant timestamp,
         TimelineEventKind kind,
         String headline,
         String detail,
-        String screenshotPath
+        String screenshotDataUri
 ) {
 
     public TimelineEvent(Instant timestamp, TimelineEventKind kind, String headline, String detail) {

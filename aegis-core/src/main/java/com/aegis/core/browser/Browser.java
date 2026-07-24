@@ -107,4 +107,14 @@ public interface Browser {
      * requests, crashes) captured since the last call, and clears them.
      */
     List<AnomalySignal> drainAnomalies();
+
+    /**
+     * A single PNG screenshot of the current page, or an empty array if
+     * this implementation doesn't support capturing one. Default returns
+     * empty so existing/test implementations don't need to do anything —
+     * only {@code PlaywrightBrowser} needs a real one.
+     */
+    default byte[] screenshotPng() {
+        return new byte[0];
+    }
 }

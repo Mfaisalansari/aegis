@@ -8,6 +8,7 @@ import com.aegis.core.bug.RuleBasedRecommendationEngine;
 import com.aegis.core.mission.MissionPlan;
 import com.aegis.core.mission.RuleBasedMissionPlanner;
 import com.aegis.core.reasoning.learning.PatternStatistics;
+import com.aegis.core.resilience.ScreenshotSample;
 import com.aegis.model.experience.Experience;
 import com.aegis.model.finding.Finding;
 import com.aegis.model.mission.MissionStatus;
@@ -60,18 +61,32 @@ public class HtmlExplainabilityReportGenerator {
     }
 
     /**
-     * The full report, with this mission's own Experience list (Reporting
-     * v2) also supplied — powers the Mission Timeline's accurate
-     * Execution Successful/Failed events and the Learning summary. Pass
-     * List.of() (what every shorter overload above does) if no
-     * ExperienceRepository is available; both degrade gracefully rather
-     * than failing.
+     * Same report, with this mission's own Experience list (Reporting v2)
+     * also supplied — powers the Mission Timeline's accurate Execution
+     * Successful/Failed events and the Learning summary. Pass List.of()
+     * (what every shorter overload above does) if no ExperienceRepository
+     * is available; both degrade gracefully rather than failing. No
+     * screenshots either — see the 7-arg overload below.
      */
     public String generate(
             MissionContext context, MissionStatus status, BugExplainer explainer,
             RecommendationEngine recommender, MissionPlan plan, List<Experience> experiences) {
+        return generate(context, status, explainer, recommender, plan, experiences, List.of());
+    }
 
-        MissionReportData data = MissionReportData.from(context, status, explainer, recommender, plan, experiences);
+    /**
+     * The full report: everything above, plus every screenshot
+     * SelfHealingBrowser captured this run (v1.1 follow-up to Reporting
+     * v2's screenshot hook) — matched to the nearest Execution event by
+     * timestamp. Pass List.of() when none were captured.
+     */
+    public String generate(
+            MissionContext context, MissionStatus status, BugExplainer explainer,
+            RecommendationEngine recommender, MissionPlan plan, List<Experience> experiences,
+            List<ScreenshotSample> screenshots) {
+
+        MissionReportData data =
+                MissionReportData.from(context, status, explainer, recommender, plan, experiences, screenshots);
 
         StringBuilder html = new StringBuilder();
 
@@ -235,9 +250,9 @@ public class HtmlExplainabilityReportGenerator {
                 section.append("<div class=\"timeline-detail\">").append(escape(event.detail())).append("</div>");
             }
 
-            if (event.screenshotPath() != null && !event.screenshotPath().isBlank()) {
+            if (event.screenshotDataUri() != null && !event.screenshotDataUri().isBlank()) {
                 section.append("<img class=\"timeline-screenshot\" src=\"")
-                        .append(escapeAttr(event.screenshotPath())).append("\" alt=\"Screenshot\"/>");
+                        .append(escapeAttr(event.screenshotDataUri())).append("\" alt=\"Screenshot\"/>");
             }
 
             section.append("</div></li>");
