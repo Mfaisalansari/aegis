@@ -393,7 +393,7 @@ Live-verified against a real saucedemo.com run: all 3 EXECUTION events in that r
 
 ---
 
-# 🟢 Framework Adoption — Stages 1–2 of 6
+# 🟢 Framework Adoption — Stages 1–3 of 6
 
 ## Status
 
@@ -401,8 +401,8 @@ This is a separate, much larger user-authored initiative beyond the original roa
 
 1. **Framework Adoption** — public SDK, config file, sample projects. Complete (2026-07-25).
 2. **Plugin Architecture** — extension points (browser/observer/finding/LLM/identity/report plugins). Complete (2026-07-25).
-3. **Enterprise Readiness** — mission/environment profiles, secret management, parallel execution, scheduling, CLI. Not started.
-4. **Ecosystem** — full docs (user/architecture/plugin-dev guides, API reference, FAQ), a real `aegis` CLI (`init`/`run`/`report`/`validate`/`doctor`), IDE templates. Not started.
+3. **Enterprise Readiness** — mission/environment profiles, secret management, parallel execution, scheduling, CLI. Complete (2026-07-25).
+4. **Ecosystem** — full docs (user/architecture/plugin-dev guides, API reference, FAQ), a real `aegis` CLI (`init`/`report`/`validate`/`doctor` — `run` already shipped in Stage 3), IDE templates. Not started.
 5. **Performance & Quality** — benchmarking, memory/thread-safety review, API stability, dependency cleanup, test coverage. No new functionality. Not started.
 6. **Community Release** — README/CONTRIBUTING/CHANGELOG/license/versioning policy, GitHub Actions, issue templates. Not started.
 
@@ -480,7 +480,48 @@ For "Authentication Plugin," the user rejected the original framing (a plugin ru
 - **Live-verified against `sample-saucedemo`, completely unmodified** — the plugin jar's compiled output added to the runtime classpath only: the `FindingRule` fired (`Finding [LOW] PLUGIN_DEMO: page title matched 'Swag Labs'`, and was later even picked up and severity-escalated by the existing frozen bug-clustering logic with zero special-casing), the `ReportRenderer` wrote a real 4th report file, the `CredentialProvider` correctly resolved `env:AEGIS_DEMO_PASSWORD` (confirmed by the mission reaching genuine `SUCCESS` — a wrong password would have failed login) and failed loudly and clearly when the env var was unset, and `DemoBrowserFactory` was genuinely invoked for `browser.type: demo-browser`. Confirmed `aegis-launcher`'s existing `SauceDemoMain` (no plugin jar on its classpath) still produces exactly 3 report formats, not 4 — plugins are purely classpath-driven, never silently always-on.
 - `Browser.applySession()` — the most novel new runtime behavior — smoke-tested directly against real Playwright in 3 scenarios: cookies+headers applied pre-navigation (no throw), localStorage/sessionStorage applied post-navigation-then-reload (confirmed via a real page reading the injected value back and setting its own title to it), and a persistent browser profile relaunch (confirmed via the profile directory actually being created on disk). Full "skip login entirely on a live site" wasn't proven live — would need a cooperating real backend issuing valid session tokens — noted honestly rather than faked.
 
-**This completes Stage 2 of 6.** Stages 3–6 are real, tracked, and not started.
+**This completes Stage 2 of 6.**
+
+---
+
+## Stage 3 exit criteria
+
+*"Can be integrated into CI/CD pipelines with minimal setup."*
+
+## Stage 3 design
+
+The spec listed 6 features: multiple mission profiles, environment profiles, secret management, parallel execution, mission scheduling, CLI improvements, with the example `aegis run --config production.yaml`. Confirmed with the user: mission profiles and environment profiles are two orthogonal, composable axes — environment = *where* to run (baseUrl/credentials/browser per dev/staging/production), mission = *what* to run (different named missions/strategies within one config file).
+
+**Investigation found "parallel execution" needed zero `aegis-core` changes.** Exhaustive grep found zero mutable `static` fields anywhere in `aegis-core`/`aegis-api`/`aegis-model`; every collection `EngineFactory.create()` builds is a fresh local instance; `Playwright.create()` is designed for independent concurrent instances. Concurrent `Aegis.run(...)` calls were already safe — this made "parallel execution" a thin orchestration layer, not an architecture change.
+
+**Two-axis config, additive and backward-compatible** — the Stage 1 single-mission `application:`/`browser:`/`mission:`/`report:` shape is untouched; a second, new top-level shape is recognized alongside it:
+```yaml
+environments:
+  dev: { application: {...}, browser: {...} }
+  production: { application: {...}, browser: {...} }
+missions:
+  smoke-test: { mission: {...} }
+  full-regression: { mission: {...}, application: {...} }   # optional override, e.g. a different successUrlContains
+report:
+  directory: reports
+```
+New `aegis-api` types: `EnvironmentProfile`, `MissionProfile`, `EnterpriseConfig` (`resolve(environment, mission)` merges environment → mission-override → produces a plain `AegisConfig` — the key design property: everything downstream, `MissionBuilder`/`AegisApplication`/`Launcher`, needs zero changes), `EnterpriseConfigLoader` (same hand-mapped-tree approach as `AegisConfigLoader`, reusing its section/field helpers directly — widened from `private` to package-private for exactly this). `ApplicationConfig.merge(base, override)` — new static helper, field-by-field "non-null override wins."
+
+**Parallel execution**: new `ParallelMissionRunner` — `runAll(Map<String, Mission>, int maxConcurrency)`, an `ExecutorService`/`CompletableFuture` fan-out over `Aegis.run(...)`. If one mission throws, results for the others still come back (not fail-fast/cancel) — a broken site shouldn't stop the rest of a batch from reporting.
+
+**Secret management**: promoted a real `EnvCredentialProvider` into `aegis-api` itself (own `META-INF/services` entry) — every consumer now gets `env:VAR_NAME` resolution by default, no plugin jar needed. `examples/plugin-example`'s copy stays as the Stage 2 plugin-mechanism demo, unrelated to this.
+
+**Mission scheduling — scoped down, stated plainly**: no internal daemon/scheduler was built. A CI/CD system (GitHub Actions cron, Jenkins cron, a k8s CronJob) already does this well; Stage 3's real answer is a clean, one-shot, exit-code-driven CLI a scheduler can invoke — same judgment call already made for LLM/Observer plugins in Stage 2.
+
+**CLI**: new `aegis-cli` module, `maven-shade-plugin` (with a `ServicesResourceTransformer` — merges every dependency's `META-INF/services/*` instead of one silently overwriting another, required for Stage 2 plugin discovery to survive shading) producing a runnable fat jar, `Main-Class: com.aegis.cli.CliMain`. Scope deliberately just `run` — Stage 4 owns `init`/`report`/`validate`/`doctor`. `Launcher.run(...)`'s return type widened from `void` to `MissionStatus` (existing callers that ignore the return value keep compiling unchanged) so the CLI can translate the real outcome into an exit code: `SUCCESS`→0, `FAILED`→1, `PARTIAL`→2 — the actual mechanism that makes "CI/CD integration" real.
+
+## Stage 3 verification
+
+- 14 new unit tests: `ApplicationConfigMergeTest`, `EnterpriseConfigTest` (resolve/merge precedence, unknown environment/mission errors clearly), `EnterpriseConfigLoaderTest` (parsing, `isEnterpriseShaped` detection), `EnvCredentialProviderTest`. Full suite: 274/274 passing.
+- **Live-verified the CLI against a real 2-environment/2-mission config, targeting saucedemo.com, through the actual `CliMain` logic** (manual-classpath technique — no `mvn` binary in this sandbox, so the shade-jar *packaging* itself couldn't be built/run here; stated honestly rather than faked, while every line of `CliMain`'s own logic ran for real): `--env dev --mission smoke-test` resolved correctly, the built-in `EnvCredentialProvider` resolved `env:AEGIS_ENTERPRISE_TEST_PASSWORD` with no plugin jar on the classpath (confirmed via the real password value reaching the login form), `headless`/custom `report.directory` were honored, mission reached real `SUCCESS`, **exit code 0**. Confirmed the missing-`--env`/`--mission` error path (exit code 1, clear message) and a genuinely `FAILED` mission (exit code 1) separately.
+- **Live-verified `ParallelMissionRunner`** running SauceDemo + OrangeHRM concurrently: both reached real `SUCCESS` in 11.4s combined (well under what two sequential runs would take, given OrangeHRM alone typically takes 10s+) — real concurrency, not simulated. A transient error surfaced mid-run under the concurrent load and was caught and recovered by the existing (Phase 9) self-healing retry logic with no special handling needed.
+
+**This completes Stage 3 of 6.** Stages 4–6 are real, tracked, and not started.
 
 ---
 

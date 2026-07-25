@@ -4,6 +4,7 @@ import com.aegis.core.Aegis;
 import com.aegis.core.AegisReport;
 import com.aegis.core.browser.BrowserConfig;
 import com.aegis.model.mission.Mission;
+import com.aegis.model.mission.MissionStatus;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -18,30 +19,36 @@ import java.util.Map;
  * layer and generalized. {@link Aegis} itself stays disk-free; this is
  * the batteries-included convenience default a sample project's
  * {@code main()} calls with one line.
+ *
+ * Returns the mission's {@link MissionStatus} (Stage 3) so a caller —
+ * chiefly {@code aegis-cli}'s {@code CliMain} — can translate it into a
+ * process exit code for CI/CD. Existing callers that ignore the return
+ * value (every sample's {@code Main}, {@code aegis-launcher}'s
+ * {@code MissionRunner}) keep compiling unchanged.
  */
 public final class Launcher {
 
     private Launcher() {
     }
 
-    public static void run(AegisApplication application) {
+    public static MissionStatus run(AegisApplication application) {
 
         System.out.println("Application: " + application.name());
         System.out.println();
 
         AegisConfig config = application.config();
-        run(application.mission(), config.browser(), config.report().directory());
+        return run(application.mission(), config.browser(), config.report().directory());
     }
 
-    public static void run(Mission mission) {
-        run(mission, BrowserConfig.defaults());
+    public static MissionStatus run(Mission mission) {
+        return run(mission, BrowserConfig.defaults());
     }
 
-    public static void run(Mission mission, BrowserConfig browserConfig) {
-        run(mission, browserConfig, ReportConfig.defaults().directory());
+    public static MissionStatus run(Mission mission, BrowserConfig browserConfig) {
+        return run(mission, browserConfig, ReportConfig.defaults().directory());
     }
 
-    public static void run(Mission mission, BrowserConfig browserConfig, String reportsDirectory) {
+    public static MissionStatus run(Mission mission, BrowserConfig browserConfig, String reportsDirectory) {
 
         System.out.println("=================================");
         System.out.println("         AEGIS v1.0");
@@ -79,6 +86,8 @@ public final class Launcher {
         }
 
         System.out.println("=================================");
+
+        return report.status();
     }
 
     private static Path writeReport(String content, long timestamp, String extension, String reportsDirectory) {

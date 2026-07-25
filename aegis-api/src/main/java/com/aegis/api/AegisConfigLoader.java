@@ -60,8 +60,7 @@ public final class AegisConfigLoader {
             throw new AegisConfigException("Config file must contain a YAML mapping at the top level");
         }
 
-        List<CredentialProvider> credentialProviders = new ArrayList<>();
-        ServiceLoader.load(CredentialProvider.class).forEach(credentialProviders::add);
+        List<CredentialProvider> credentialProviders = discoverCredentialProviders();
 
         return new AegisConfig(
                 readApplication(section(root, "application"), credentialProviders),
@@ -71,12 +70,19 @@ public final class AegisConfigLoader {
         );
     }
 
-    private static Map<?, ?> section(Map<?, ?> root, String key) {
+    /** Package-private (not private): reused by {@link EnterpriseConfigLoader} for the environments:/missions: shape. */
+    static Map<?, ?> section(Map<?, ?> root, String key) {
         Object value = root.get(key);
         return value instanceof Map<?, ?> map ? map : Map.of();
     }
 
-    private static ApplicationConfig readApplication(Map<?, ?> section, List<CredentialProvider> credentialProviders) {
+    static List<CredentialProvider> discoverCredentialProviders() {
+        List<CredentialProvider> credentialProviders = new ArrayList<>();
+        ServiceLoader.load(CredentialProvider.class).forEach(credentialProviders::add);
+        return credentialProviders;
+    }
+
+    static ApplicationConfig readApplication(Map<?, ?> section, List<CredentialProvider> credentialProviders) {
         return new ApplicationConfig(
                 string(section, "baseUrl"),
                 resolveCredential(string(section, "username"), credentialProviders),
@@ -106,20 +112,20 @@ public final class AegisConfigLoader {
         return rawValue;
     }
 
-    private static BrowserConfig readBrowser(Map<?, ?> section) {
+    static BrowserConfig readBrowser(Map<?, ?> section) {
         // BrowserConfig's own compact constructor already normalizes a
         // null/blank type to "chromium" — only headless needs a fallback
         // here, since it's a primitive that can't carry "unset" itself.
         return new BrowserConfig(string(section, "type"), boolOr(section, "headless", false));
     }
 
-    private static ReportConfig readReport(Map<?, ?> section) {
+    static ReportConfig readReport(Map<?, ?> section) {
         // ReportConfig's own compact constructor already normalizes a
         // null/blank directory to "reports" — nothing extra needed here.
         return new ReportConfig(string(section, "directory"));
     }
 
-    private static MissionConfig readMission(Map<?, ?> section) {
+    static MissionConfig readMission(Map<?, ?> section) {
 
         MissionConfig defaults = MissionConfig.defaults();
 
@@ -135,22 +141,22 @@ public final class AegisConfigLoader {
         );
     }
 
-    private static String string(Map<?, ?> section, String key) {
+    static String string(Map<?, ?> section, String key) {
         Object value = section.get(key);
         return value == null ? null : String.valueOf(value);
     }
 
-    private static String stringOr(Map<?, ?> section, String key, String fallback) {
+    static String stringOr(Map<?, ?> section, String key, String fallback) {
         String value = string(section, key);
         return value != null ? value : fallback;
     }
 
-    private static boolean boolOr(Map<?, ?> section, String key, boolean fallback) {
+    static boolean boolOr(Map<?, ?> section, String key, boolean fallback) {
         Object value = section.get(key);
         return value instanceof Boolean bool ? bool : fallback;
     }
 
-    private static Integer integer(Map<?, ?> section, String key) {
+    static Integer integer(Map<?, ?> section, String key) {
         Object value = section.get(key);
         return value instanceof Number number ? number.intValue() : null;
     }

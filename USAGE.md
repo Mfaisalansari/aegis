@@ -80,8 +80,8 @@ Everything below (§1 onward) documents the same capabilities from the `aegis-co
 
 ## 1. Prerequisites
 
-- **Java 23** — all modules (`aegis-model`, `aegis-core`, `aegis-api`, `aegis-launcher`, `samples/*`) target Java 23 (`maven.compiler.source`/`target` in the root `pom.xml`).
-- **Maven** — a standard multi-module reactor build (root `pom.xml` lists modules in order: `aegis-model`, `aegis-core`, `aegis-api`, `aegis-launcher`, `samples`).
+- **Java 23** — all modules (`aegis-model`, `aegis-core`, `aegis-api`, `aegis-cli`, `aegis-launcher`, `samples/*`, `examples/*`) target Java 23 (`maven.compiler.source`/`target` in the root `pom.xml`).
+- **Maven** — a standard multi-module reactor build (root `pom.xml` lists modules in order: `aegis-model`, `aegis-core`, `aegis-api`, `aegis-cli`, `aegis-launcher`, `samples`, `examples`).
 - **Playwright browsers** — `aegis-core` depends on `com.microsoft.playwright:playwright:1.54.0`. The first run downloads Chromium automatically; if it doesn't, install manually:
   ```
   mvn -pl aegis-core exec:java -Dexec.mainClass=com.microsoft.playwright.CLI -Dexec.args="install"
@@ -98,7 +98,7 @@ From the repo root:
 mvn clean install
 ```
 
-This compiles all three modules in dependency order and runs the test suite (JUnit 5.13.4). There's no assembly/shade plugin configured, so this does **not** produce a single runnable fat jar — see §3 for how to actually run something.
+This compiles every module in dependency order and runs the test suite (JUnit 5.13.4). Only `aegis-cli` has a shade plugin configured (see §8c) — building it produces a runnable fat jar; every other module still needs `mvn exec:java` or an IDE run (§3) or embedding via `aegis-api` (§0/§8a).
 
 To compile without running tests:
 
@@ -368,6 +368,80 @@ Plugins are purely classpath-driven — nothing is "installed" or configured to 
 
 ---
 
+## 8c. Enterprise Configuration, Parallel Execution & the CLI
+
+Stage 3 "Enterprise Readiness." Everything here is additive on top of §0 — a plain single-mission `application.yml` still works exactly as before.
+
+### Environment profiles × mission profiles
+
+Two orthogonal, composable axes in one config file: **environment** = *where* to run (dev/staging/production — baseUrl, credentials, browser settings), **mission** = *what* to run (smoke-test/full-regression — strategy, iteration budget, optionally its own `successUrlContains`). A file is recognized as this shape the moment it has a top-level `environments:` or `missions:` key, instead of the flat `application:`/`browser:`/`mission:` shape:
+
+```yaml
+environments:
+  dev:
+    application: { baseUrl: https://dev.example.com, username: dev_user, password: env:DEV_PASSWORD }
+    browser: { headless: true }
+  production:
+    application: { baseUrl: https://example.com, username: prod_user, password: env:PROD_PASSWORD }
+    browser: { headless: true }
+
+missions:
+  smoke-test:
+    mission: { strategy: greedy, maxIterations: 10 }
+  full-regression:
+    mission: { strategy: adaptive, maxIterations: 50 }
+    application: { successUrlContains: done }   # optional — overrides just this field for this mission
+
+report:
+  directory: reports
+```
+
+Programmatically: `EnterpriseConfigLoader.load(path)` → `EnterpriseConfig`, then `.resolve("dev", "smoke-test")` → an ordinary `AegisConfig` (environment's settings, with the mission's `application` override, if any, layered on top for just the fields it sets) — feed that into `MissionBuilder.from(...)`/`Launcher.run(...)` exactly like §0's single-mission config; nothing downstream needs to know which shape it came from.
+
+### Secret management
+
+`env:VAR_NAME` resolution ships as a real, built-in part of `aegis-api` (not just the Stage 2 plugin demo) — any `application.username`/`.password` value (in either config shape) matching that pattern resolves against a real environment variable automatically, no extra plugin jar needed. Write your own `CredentialProvider` (§8b) for Vault/AWS Secrets Manager/Azure Key Vault/etc.
+
+### Parallel execution
+
+```java
+Map<String, AegisReport> results = ParallelMissionRunner.runAll(
+        Map.of("saucedemo", saucedemoMission, "orangehrm", orangeHrmMission),
+        2   // max concurrency
+);
+```
+
+Runs independent missions concurrently — safe with no extra setup, since every `Aegis.run(...)` call already builds its own fresh browser/state internally. If one mission throws, the others still report back rather than the whole batch aborting.
+
+### The `aegis-cli` command
+
+```
+java -jar aegis-cli.jar run --config production.yaml [--env production] [--mission smoke-test]
+```
+
+`--env`/`--mission` are required only if `--config` points at the enterprise shape above; a plain single-mission config just needs `--config`. **Exit code reflects the real mission outcome** — `0` = SUCCESS, `1` = FAILED, `2` = PARTIAL — which is what makes this usable as an actual CI/CD pipeline step, not just a script that always "succeeds":
+
+```yaml
+# .github/workflows/nightly-smoke-test.yml
+on:
+  schedule:
+    - cron: '0 2 * * *'   # 2am daily — AEGIS itself has no internal scheduler; this is the intended pattern
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: java -jar aegis-cli.jar run --config production.yaml --env production --mission smoke-test
+        env:
+          PROD_PASSWORD: ${{ secrets.PROD_PASSWORD }}
+```
+
+("Mission scheduling" is deliberately not an AEGIS feature — a CI/CD system's own cron trigger already does this well; AEGIS's job is being a clean, exit-code-driven one-shot command such a scheduler can call.)
+
+`aegis-cli`'s scope is deliberately just `run` — `init`/`report`/`validate`/`doctor` are Stage 4 ("Ecosystem"), a separate, later initiative.
+
+---
+
 ## 9. Troubleshooting
 
 - **Mission always ends `FAILED` with 0 findings**: check `successUrlContains` is actually set and matches a real URL substring the site reaches — without it, `UrlContainsGoalEvaluator` never resolves and the mission runs out its `maxIterations` (default 10) every time.
@@ -377,6 +451,8 @@ Plugins are purely classpath-driven — nothing is "installed" or configured to 
 - **Playwright fails to launch**: confirm Chromium is installed (see §1); check for a stale lock/profile directory if a previous run crashed mid-launch.
 - **A plugin doesn't seem to be discovered**: confirm its jar (or, when running from compiled classes, its output directory) is actually on the runtime classpath, and that `META-INF/services/<fully-qualified-interface-name>` exists and contains your implementation's fully-qualified class name on its own line — a typo there means `ServiceLoader` silently finds nothing, no error.
 - **`IllegalArgumentException: Unknown browser type`**: `browser.type` doesn't match chromium/firefox/webkit and no discovered `BrowserFactory` plugin's `type()` matches it either — check the plugin is on the classpath (see above) and the name matches exactly (case-insensitive).
+- **`aegis-cli` exits with "This config defines environments/missions — pass both --env <name> and --mission <name>"**: your config has a top-level `environments:` or `missions:` key, which requires both flags — a plain single-mission config only needs `--config`.
+- **`AegisConfigException: Unknown environment` / `Unknown mission`**: the `--env`/`--mission` name doesn't match a key under `environments:`/`missions:` in the config file — these are exact, case-sensitive matches; the error message lists every known name.
 
 ---
 

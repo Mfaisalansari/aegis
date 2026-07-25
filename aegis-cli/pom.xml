@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.aegis</groupId>
+        <artifactId>aegis</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>aegis-cli</artifactId>
+
+    <properties>
+        <maven.compiler.source>23</maven.compiler.source>
+        <maven.compiler.target>23</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.aegis</groupId>
+            <artifactId>aegis-api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+    </dependencies>
+
+    <!--
+         Produces a single runnable jar (java -jar aegis-cli.jar run
+         --config ...) bundling every runtime dependency (Playwright,
+         Jackson, SnakeYAML, SLF4J, Logback) — this is the one module in
+         the project that needs that, everything else so far has been
+         run via `mvn exec:java` against the reactor's own classpath.
+    -->
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>com.aegis.cli.CliMain</mainClass>
+                                </transformer>
+                                <!--
+                                     Merges every dependency jar's
+                                     META-INF/services/* files instead of
+                                     letting one silently overwrite
+                                     another's — required for Stage 2's
+                                     ServiceLoader-based plugin discovery
+                                     (e.g. aegis-api's own bundled
+                                     EnvCredentialProvider) to survive
+                                     being shaded into one jar.
+                                -->
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                            </transformers>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
