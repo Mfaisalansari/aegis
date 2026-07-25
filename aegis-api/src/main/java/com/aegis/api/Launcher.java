@@ -10,6 +10,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.Map;
 
 /**
  * Runs a mission end-to-end and writes all three report formats to disk —
@@ -69,6 +70,14 @@ public final class Launcher {
         System.out.println("Report     : " + textReportPath);
         System.out.println("HTML Report: " + htmlReportPath);
         System.out.println("JSON Report: " + jsonReportPath);
+
+        // Stage 2 "Report Plugin" — one extra file per discovered
+        // ReportRenderer, named after it (e.g. aegis-report-<ts>.markdown).
+        for (Map.Entry<String, String> pluginReport : report.pluginReports().entrySet()) {
+            Path path = writeReport(pluginReport.getValue(), timestamp, pluginReport.getKey(), reportsDirectory);
+            System.out.println(pluginReport.getKey() + " Report: " + path);
+        }
+
         System.out.println("=================================");
     }
 

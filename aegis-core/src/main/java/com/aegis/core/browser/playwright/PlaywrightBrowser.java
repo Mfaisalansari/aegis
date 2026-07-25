@@ -2,21 +2,25 @@ package com.aegis.core.browser.playwright;
 
 import com.aegis.core.browser.Browser;
 import com.aegis.core.browser.BrowserConfig;
+import com.aegis.core.plugin.AuthenticatedSession;
 import com.aegis.model.observation.AnomalySignal;
 import com.aegis.model.observation.ElementInfo;
 import com.microsoft.playwright.BrowserType;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
+import com.microsoft.playwright.options.Cookie;
 import com.microsoft.playwright.options.LoadState;
 import com.microsoft.playwright.options.WaitUntilState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 public class PlaywrightBrowser implements Browser {
@@ -29,6 +33,9 @@ public class PlaywrightBrowser implements Browser {
     private Playwright playwright;
     private com.microsoft.playwright.Browser browser;
     private Page page;
+
+    /** Set by applySession() when a session carries storage data — applied after the mission's first real navigation, see navigate(). */
+    private AuthenticatedSession pendingStorageSession;
 
     public PlaywrightBrowser() {
         this(BrowserConfig.defaults());
@@ -43,20 +50,87 @@ public class PlaywrightBrowser implements Browser {
 
         playwright = Playwright.create();
 
-        BrowserType engine = switch (config.type().toLowerCase()) {
-            case "firefox" -> playwright.firefox();
-            case "webkit" -> playwright.webkit();
-            case "chromium" -> playwright.chromium();
-            default -> throw new IllegalArgumentException(
-                    "Unknown browser type: " + config.type() + " (expected chromium, firefox, or webkit)");
-        };
-
-        browser = engine.launch(
+        browser = engineFor(config.type()).launch(
                 new BrowserType.LaunchOptions()
                         .setHeadless(config.headless())
         );
 
         page = browser.newPage();
+
+        registerAnomalyListeners();
+    }
+
+    private BrowserType engineFor(String type) {
+        return switch (type.toLowerCase()) {
+            case "firefox" -> playwright.firefox();
+            case "webkit" -> playwright.webkit();
+            case "chromium" -> playwright.chromium();
+            default -> throw new IllegalArgumentException(
+                    "Unknown browser type: " + type + " (expected chromium, firefox, or webkit)");
+        };
+    }
+
+    @Override
+    public void applySession(AuthenticatedSession session) {
+
+        if (session.browserProfilePath() != null && !session.browserProfilePath().isBlank()) {
+            relaunchWithPersistentProfile(session.browserProfilePath());
+        }
+
+        if (!session.cookies().isEmpty()) {
+
+            List<Cookie> cookies = session.cookies().stream()
+                    .map(c -> {
+                        Cookie cookie = new Cookie(c.name(), c.value());
+                        if (c.domain() != null) {
+                            cookie.setDomain(c.domain());
+                        }
+                        if (c.path() != null) {
+                            cookie.setPath(c.path());
+                        }
+                        return cookie;
+                    })
+                    .toList();
+
+            page.context().addCookies(cookies);
+        }
+
+        if (!session.headers().isEmpty()) {
+            page.context().setExtraHTTPHeaders(session.headers());
+        }
+
+        // localStorage/sessionStorage are origin-scoped — the browser is
+        // still on about:blank at this point (applySession runs right
+        // after launch(), before any navigation), so there's no valid
+        // origin to write them against yet. Deferred until the mission's
+        // own first navigate() call, once a real origin exists.
+        if (!session.localStorage().isEmpty() || !session.sessionStorage().isEmpty()) {
+            pendingStorageSession = session;
+        }
+    }
+
+    /**
+     * Playwright only exposes a persistent (reusable) browser profile via
+     * launchPersistentContext, a different entry point than the
+     * launch()+newPage() pair already used — so a profile-based session
+     * means discarding the just-launched browser and relaunching this way
+     * instead. Safe to do here specifically because applySession() is
+     * documented to run before any mission activity: nothing has
+     * navigated or observed anything yet.
+     */
+    private void relaunchWithPersistentProfile(String profilePath) {
+
+        if (browser != null) {
+            browser.close();
+        }
+
+        com.microsoft.playwright.BrowserContext context = engineFor(config.type()).launchPersistentContext(
+                Path.of(profilePath),
+                new BrowserType.LaunchPersistentContextOptions().setHeadless(config.headless())
+        );
+
+        browser = context.browser();
+        page = context.pages().isEmpty() ? context.newPage() : context.pages().get(0);
 
         registerAnomalyListeners();
     }
@@ -167,6 +241,37 @@ public class PlaywrightBrowser implements Browser {
             log.warn("Navigation timeout. Current URL: {}", page.url());
 
             throw e;
+        }
+
+        if (pendingStorageSession != null) {
+            applyPendingStorage();
+            pendingStorageSession = null;
+        }
+    }
+
+    /**
+     * Writes any localStorage/sessionStorage from a session applied
+     * before the mission started, now that a real origin exists, then
+     * reloads — many apps only read storage once at boot, so writing it
+     * without a reload wouldn't be picked up by app code that already ran.
+     * Applied exactly once, on the mission's first navigation.
+     */
+    private void applyPendingStorage() {
+
+        try {
+
+            for (Map.Entry<String, String> entry : pendingStorageSession.localStorage().entrySet()) {
+                page.evaluate("([k, v]) => localStorage.setItem(k, v)", List.of(entry.getKey(), entry.getValue()));
+            }
+
+            for (Map.Entry<String, String> entry : pendingStorageSession.sessionStorage().entrySet()) {
+                page.evaluate("([k, v]) => sessionStorage.setItem(k, v)", List.of(entry.getKey(), entry.getValue()));
+            }
+
+            page.reload(new Page.ReloadOptions().setWaitUntil(WaitUntilState.NETWORKIDLE));
+
+        } catch (Exception e) {
+            log.warn("Failed to apply session storage: {}", e.getMessage());
         }
     }
 

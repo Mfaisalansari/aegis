@@ -86,8 +86,16 @@ public class ExplainabilityReportGenerator {
             RecommendationEngine recommender, MissionPlan plan, List<Experience> experiences,
             List<ScreenshotSample> screenshots) {
 
-        MissionReportData data =
-                MissionReportData.from(context, status, explainer, recommender, plan, experiences, screenshots);
+        return generate(MissionReportData.from(context, status, explainer, recommender, plan, experiences, screenshots));
+    }
+
+    /**
+     * Stage 2: renders directly from an already-built {@link MissionReportData}
+     * — used when the caller (e.g. {@code Aegis.run}) built it once to
+     * share across the 3 built-in generators and any {@code ReportRenderer}
+     * plugins, rather than each generator rebuilding it independently.
+     */
+    public String generate(MissionReportData data) {
 
         StringBuilder report = new StringBuilder();
 

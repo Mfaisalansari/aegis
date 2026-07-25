@@ -70,8 +70,11 @@ public class JsonReportGenerator {
             RecommendationEngine recommender, MissionPlan plan, List<Experience> experiences,
             List<ScreenshotSample> screenshots) {
 
-        MissionReportData data =
-                MissionReportData.from(context, status, explainer, recommender, plan, experiences, screenshots);
+        return generate(MissionReportData.from(context, status, explainer, recommender, plan, experiences, screenshots));
+    }
+
+    /** Stage 2: renders directly from an already-built {@link MissionReportData} — see ExplainabilityReportGenerator's javadoc on its own overload. */
+    public String generate(MissionReportData data) {
 
         try {
             return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(toJson(data));

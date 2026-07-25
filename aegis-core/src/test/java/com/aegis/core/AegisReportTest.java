@@ -21,7 +21,8 @@ class AegisReportTest {
         Mission mission = new Mission(UUID.randomUUID(), "Test", "Test", Map.of());
         MissionResult missionResult = new MissionResult(new MissionContext(mission), MissionStatus.SUCCESS);
 
-        AegisReport report = new AegisReport(missionResult, new MissionPlan(List.of("step")), "text", "html", "json");
+        AegisReport report = new AegisReport(
+                missionResult, new MissionPlan(List.of("step")), "text", "html", "json", Map.of());
 
         assertEquals(MissionStatus.SUCCESS, report.status());
     }

@@ -1,13 +1,17 @@
 package com.aegis.api;
 
 import com.aegis.core.browser.BrowserConfig;
+import com.aegis.core.plugin.CredentialProvider;
 import org.yaml.snakeyaml.Yaml;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.ServiceLoader;
 
 /**
  * Parses an {@code application.yml} into an {@link AegisConfig}. Loads
@@ -56,8 +60,11 @@ public final class AegisConfigLoader {
             throw new AegisConfigException("Config file must contain a YAML mapping at the top level");
         }
 
+        List<CredentialProvider> credentialProviders = new ArrayList<>();
+        ServiceLoader.load(CredentialProvider.class).forEach(credentialProviders::add);
+
         return new AegisConfig(
-                readApplication(section(root, "application")),
+                readApplication(section(root, "application"), credentialProviders),
                 readBrowser(section(root, "browser")),
                 readMission(section(root, "mission")),
                 readReport(section(root, "report"))
@@ -69,13 +76,34 @@ public final class AegisConfigLoader {
         return value instanceof Map<?, ?> map ? map : Map.of();
     }
 
-    private static ApplicationConfig readApplication(Map<?, ?> section) {
+    private static ApplicationConfig readApplication(Map<?, ?> section, List<CredentialProvider> credentialProviders) {
         return new ApplicationConfig(
                 string(section, "baseUrl"),
-                string(section, "username"),
-                string(section, "password"),
+                resolveCredential(string(section, "username"), credentialProviders),
+                resolveCredential(string(section, "password"), credentialProviders),
                 string(section, "successUrlContains")
         );
+    }
+
+    /**
+     * Stage 2 "Identity Integration" (credential half): a raw config
+     * value only gets resolved if some discovered {@link CredentialProvider}
+     * recognizes it (e.g. a "vault:..."/"env:..." prefix) — otherwise
+     * it's used literally, exactly as before this existed.
+     */
+    private static String resolveCredential(String rawValue, List<CredentialProvider> providers) {
+
+        if (rawValue == null) {
+            return null;
+        }
+
+        for (CredentialProvider provider : providers) {
+            if (provider.supports(rawValue)) {
+                return provider.resolve(rawValue);
+            }
+        }
+
+        return rawValue;
     }
 
     private static BrowserConfig readBrowser(Map<?, ?> section) {

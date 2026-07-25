@@ -1,5 +1,6 @@
 package com.aegis.core.browser;
 
+import com.aegis.core.plugin.AuthenticatedSession;
 import com.aegis.model.observation.AnomalySignal;
 import com.aegis.model.observation.ElementInfo;
 import java.time.Duration;
@@ -116,5 +117,18 @@ public interface Browser {
      */
     default byte[] screenshotPng() {
         return new byte[0];
+    }
+
+    /**
+     * Applies a pre-authenticated session (Stage 2 "Identity
+     * Integration") before a mission starts exploring — cookies, storage,
+     * headers, or reusing a persistent browser profile, per whichever
+     * fields the {@link AuthenticatedSession} actually populated. Default
+     * is a no-op so existing/test implementations don't need to do
+     * anything; only {@code PlaywrightBrowser} needs a real one. Called
+     * at most once, right after {@link #launch()} and before any mission
+     * activity — never mid-mission.
+     */
+    default void applySession(AuthenticatedSession session) {
     }
 }

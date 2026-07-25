@@ -17,6 +17,38 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AegisConfigLoaderTest {
 
     @Test
+    void resolvesUsernameAndPasswordThroughARealDiscoveredCredentialProvider() {
+
+        String yaml = """
+                application:
+                  baseUrl: https://example.com
+                  username: test-prefix:bob
+                  password: test-prefix:secret
+                """;
+
+        AegisConfig config = AegisConfigLoader.load(inputStream(yaml));
+
+        // TestUppercaseCredentialProvider, discovered for real via
+        // META-INF/services (src/test/resources) — not a fake standing
+        // in for the ServiceLoader mechanism, the actual thing.
+        assertEquals("BOB", config.application().username());
+        assertEquals("SECRET", config.application().password());
+    }
+
+    @Test
+    void leavesValuesUnresolvedWhenNoDiscoveredProviderSupportsThem() {
+
+        String yaml = """
+                application:
+                  username: plain-value
+                """;
+
+        AegisConfig config = AegisConfigLoader.load(inputStream(yaml));
+
+        assertEquals("plain-value", config.application().username());
+    }
+
+    @Test
     void parsesAFullYamlFileCorrectly() {
 
         String yaml = """

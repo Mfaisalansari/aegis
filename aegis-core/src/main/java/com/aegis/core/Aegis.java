@@ -13,15 +13,20 @@ import com.aegis.core.mission.LlmMissionPlanner;
 import com.aegis.core.mission.MissionPlan;
 import com.aegis.core.mission.MissionPlanner;
 import com.aegis.core.mission.RuleBasedMissionPlanner;
+import com.aegis.core.plugin.ReportRenderer;
 import com.aegis.core.report.ExplainabilityReportGenerator;
 import com.aegis.core.report.HtmlExplainabilityReportGenerator;
 import com.aegis.core.report.JsonReportGenerator;
+import com.aegis.core.report.MissionReportData;
 import com.aegis.core.resilience.ScreenshotSample;
 import com.aegis.model.experience.Experience;
 import com.aegis.model.mission.Mission;
 import com.aegis.model.mission.MissionResult;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.ServiceLoader;
 
 /**
  * AEGIS's public entry point: give it a {@link Mission}, get back the
@@ -56,7 +61,7 @@ public final class Aegis {
 
         MissionPlan plan = planner.plan(mission);
 
-        EngineFactory.CreatedEngine created = EngineFactory.create(browserConfig);
+        EngineFactory.CreatedEngine created = EngineFactory.create(mission, browserConfig);
 
         MissionResult result = created.engine().execute(mission);
 
@@ -71,16 +76,22 @@ public final class Aegis {
                 ? new LlmRecommendationEngine(OpenAiCompatibleChatClient.fromEnvironment())
                 : new RuleBasedRecommendationEngine();
 
-        String textReport = new ExplainabilityReportGenerator()
-                .generate(result.context(), result.status(), bugExplainer, recommender, plan, experiences, screenshots);
+        // Built once and shared by the 3 built-in generators and every
+        // discovered ReportRenderer plugin below, instead of each
+        // independently rebuilding the same data from raw pieces.
+        MissionReportData data = MissionReportData.from(
+                result.context(), result.status(), bugExplainer, recommender, plan, experiences, screenshots);
 
-        String htmlReport = new HtmlExplainabilityReportGenerator()
-                .generate(result.context(), result.status(), bugExplainer, recommender, plan, experiences, screenshots);
+        String textReport = new ExplainabilityReportGenerator().generate(data);
+        String htmlReport = new HtmlExplainabilityReportGenerator().generate(data);
+        String jsonReport = new JsonReportGenerator().generate(data);
 
-        String jsonReport = new JsonReportGenerator()
-                .generate(result.context(), result.status(), bugExplainer, recommender, plan, experiences, screenshots);
+        Map<String, String> pluginReports = new LinkedHashMap<>();
+        for (ReportRenderer renderer : ServiceLoader.load(ReportRenderer.class)) {
+            pluginReports.put(renderer.name(), renderer.render(data));
+        }
 
-        return new AegisReport(result, plan, textReport, htmlReport, jsonReport);
+        return new AegisReport(result, plan, textReport, htmlReport, jsonReport, pluginReports);
     }
 
     /**

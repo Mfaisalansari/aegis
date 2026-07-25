@@ -346,6 +346,28 @@ Self-healing (retry + locator healing + navigation recovery, Phase 9) requires n
 
 ---
 
+## 8b. Writing a Plugin
+
+Stage 2 "Plugin Architecture": add capabilities without touching `aegis-core`. A plugin is a jar on the classpath implementing one or more interfaces from `com.aegis.core.plugin`, registered via a `META-INF/services/<interface>` file listing your implementation's fully-qualified class name (Java's standard `ServiceLoader` mechanism — no framework-specific registration needed). Depend on `aegis-core` directly (that's where these interfaces live), not `aegis-api`.
+
+`examples/plugin-example` is a complete, real, working example — copy its shape. It implements all 4 of the interfaces below and is verified live (see `AEGIS_ROADMAP.md`'s Stage 2 section) by adding its build output to `sample-saucedemo`'s classpath with zero edits to either.
+
+| Interface | What it's for | Selection |
+|---|---|---|
+| `FindingRule` — `List<Finding> evaluate(MissionContext)` | Custom bug/problem detection, alongside the built-in console-error/page-error/crash/dialog signals | Every discovered rule runs every mission iteration; findings merge with the built-in detector's |
+| `ReportRenderer` — `String name(); String render(MissionReportData)` | A custom output format alongside text/HTML/JSON | Every discovered renderer runs once per mission; output appears in `AegisReport.pluginReports()` (keyed by `name()`) and gets written to disk by `Launcher` as `aegis-report-<ts>.<name>` |
+| `NamedActionScorer extends ActionScorer` — adds `String strategyName()` | A custom exploration strategy | Set `mission.strategy` to your `strategyName()` in `application.yml`, same as any built-in strategy (§5) |
+| `NamedInputValueResolver extends InputValueResolver` — adds `String strategyName()` | A custom input-fill strategy | Set `mission.inputStrategy` to your `strategyName()`, same as any built-in (§4) |
+| `BrowserFactory` — `String type(); Browser create(BrowserConfig)` | An alternative `Browser` implementation (Selenium-backed, a remote grid, ...) | Set `browser.type` to your `type()` in `application.yml` |
+| `CredentialProvider` — `boolean supports(String); String resolve(String)` | Resolving a secret *reference* (e.g. `vault:...`, `env:...`) into a real value, so plaintext secrets never sit in `application.yml` | Applied automatically to `application.username`/`.password` if some discovered provider's `supports()` returns true for the raw value |
+| `SessionProvider` — `Optional<AuthenticatedSession> createSession(Mission)` | Establishing a pre-authenticated session before exploration starts (log in via an API, restore cookies, reuse a browser profile, complete SSO) | Tried right after the browser launches; first non-empty result wins |
+
+**On `SessionProvider`/`AuthenticatedSession` specifically**: this is deliberately data-only — `AuthenticatedSession` carries cookies, localStorage/sessionStorage, headers, or a persistent browser profile path, never behavior. AEGIS itself is the only thing that ever calls `page.click()`/`.fill()`/`.navigate()`; a plugin that tried to perform UI actions would be reintroducing scripted automation, which this project deliberately doesn't do anywhere. Once a session is applied, the normal autonomous engine takes over exactly as if the site had been visited fresh and was already logged in.
+
+Plugins are purely classpath-driven — nothing is "installed" or configured to enable them beyond being on the classpath, and nothing breaks if none are present (every discovered-plugin loop above is empty by default, same behavior as before Stage 2 existed).
+
+---
+
 ## 9. Troubleshooting
 
 - **Mission always ends `FAILED` with 0 findings**: check `successUrlContains` is actually set and matches a real URL substring the site reaches — without it, `UrlContainsGoalEvaluator` never resolves and the mission runs out its `maxIterations` (default 10) every time.
@@ -353,6 +375,8 @@ Self-healing (retry + locator healing + navigation recovery, Phase 9) requires n
 - **`IllegalArgumentException: Unknown exploration strategy` / `Unknown input strategy`**: the value doesn't match one of the exact keys in §5 or §4 — these are case-sensitive exact string matches, not fuzzy.
 - **LLM features silently doing nothing**: the three report-level env vars (`AEGIS_LLM_BUG_EXPLANATIONS`, `AEGIS_LLM_RECOMMENDATIONS`, `AEGIS_LLM_MISSION_PLANNING`) require the value to be exactly `enabled` (case-insensitive) — anything else, including unset, is off.
 - **Playwright fails to launch**: confirm Chromium is installed (see §1); check for a stale lock/profile directory if a previous run crashed mid-launch.
+- **A plugin doesn't seem to be discovered**: confirm its jar (or, when running from compiled classes, its output directory) is actually on the runtime classpath, and that `META-INF/services/<fully-qualified-interface-name>` exists and contains your implementation's fully-qualified class name on its own line — a typo there means `ServiceLoader` silently finds nothing, no error.
+- **`IllegalArgumentException: Unknown browser type`**: `browser.type` doesn't match chromium/firefox/webkit and no discovered `BrowserFactory` plugin's `type()` matches it either — check the plugin is on the classpath (see above) and the name matches exactly (case-insensitive).
 
 ---
 

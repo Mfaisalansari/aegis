@@ -16,6 +16,7 @@
         <module>aegis-api</module>
         <module>aegis-launcher</module>
         <module>samples</module>
+        <module>examples</module>
     </modules>
 
     <properties>

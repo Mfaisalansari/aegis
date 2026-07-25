@@ -393,14 +393,14 @@ Live-verified against a real saucedemo.com run: all 3 EXECUTION events in that r
 
 ---
 
-# 🟢 Framework Adoption — Stage 1 of 6 (Complete)
+# 🟢 Framework Adoption — Stages 1–2 of 6
 
 ## Status
 
-Stage 1 completed (2026-07-25). This is a separate, much larger user-authored initiative beyond the original roadmap (Phases 0–10) and the post-v1.0 items — 6 stages total, tracked here as each is picked up:
+This is a separate, much larger user-authored initiative beyond the original roadmap (Phases 0–10) and the post-v1.0 items — 6 stages total, tracked here as each is picked up:
 
-1. **Framework Adoption** (this section) — public SDK, config file, sample projects. Complete.
-2. **Plugin Architecture** — extension points (browser/observer/finding/LLM/auth/report plugins). Not started.
+1. **Framework Adoption** — public SDK, config file, sample projects. Complete (2026-07-25).
+2. **Plugin Architecture** — extension points (browser/observer/finding/LLM/identity/report plugins). Complete (2026-07-25).
 3. **Enterprise Readiness** — mission/environment profiles, secret management, parallel execution, scheduling, CLI. Not started.
 4. **Ecosystem** — full docs (user/architecture/plugin-dev guides, API reference, FAQ), a real `aegis` CLI (`init`/`run`/`report`/`validate`/`doctor`), IDE templates. Not started.
 5. **Performance & Quality** — benchmarking, memory/thread-safety review, API stability, dependency cleanup, test coverage. No new functionality. Not started.
@@ -437,7 +437,50 @@ Live-verified all 3 samples end-to-end, each run from its own module directory w
 - Also smoke-tested `browser.headless: true` and `browser.type: firefox` against `sample-saucedemo` (both browser binaries already present locally) — both reached real `SUCCESS`, confirming `BrowserConfig` genuinely reaches Playwright, not just that the YAML parses.
 - Confirmed `aegis-launcher`'s existing 6 `*Main` classes (the dev/regression harness used all session) still work unchanged — `MissionRunner` now delegates to `Launcher`, verified with a fresh `SauceDemoMain` run.
 
-**This completes Stage 1 of 6.** Stages 2–6 are real, tracked, and not started.
+**This completes Stage 1 of 6.**
+
+---
+
+## Stage 2 exit criteria
+
+*"New functionality can be added without changing engine code."*
+
+## Stage 2 design
+
+The user's spec named 6 plugin categories (Browser, Observer, Finding, LLM, Authentication, Report) and 5 example extension-point interfaces (`FindingRule`, `MissionStrategy`, `ActionProvider`, `InputResolver`, `ReportRenderer`). Investigation found 3 of the 5 already exist as frozen interfaces — `ActionScorer`≈MissionStrategy, `InputValueResolver`≈InputResolver, `CandidateActionGenerator`≈ActionProvider — each already with an established Composite/Registry wiring pattern in `EngineFactory`. Stage 2's job for these was adding *discovery*, not inventing new interfaces. Only `FindingRule` and `ReportRenderer` were genuinely new.
+
+For "Authentication Plugin," the user rejected the original framing (a plugin running arbitrary code against the browser) as reintroducing scripting — `page.click()`/`.fill()`/`.navigate()` "belong exclusively to AEGIS" — and specified a replacement: **Identity & Credential Integration**. A `SessionProvider` returns pre-authenticated session *data* only (cookies/storage/headers/a persistent profile path); AEGIS itself is the only thing that ever touches the browser to apply it. A separate `CredentialProvider` resolves secret references (Vault/AWS/Azure/env/...) into config values.
+
+**Mechanism: Java's built-in `ServiceLoader`/SPI.** Zero new dependency, standard idiom for exactly this problem. A plugin jar on the classpath with a `META-INF/services/<interface>` file is auto-discovered; zero `aegis-core` edits needed.
+
+**New package `com.aegis.core.plugin`:**
+
+| Interface | Shape | Discovery/selection |
+|---|---|---|
+| `FindingRule` | `List<Finding> evaluate(MissionContext)` | Composite — every discovered rule runs every iteration, merged with the built-in detector's findings via new `CompositeAnomalyDetector` |
+| `ReportRenderer` | `String name(); String render(MissionReportData)` | Composite — every discovered renderer runs once per mission, collected into `AegisReport.pluginReports()` |
+| `NamedActionScorer extends ActionScorer` | adds `String strategyName()` | Registry — added to the `explorationStrategy` map alongside the 10 built-ins |
+| `NamedInputValueResolver extends InputValueResolver` | adds `String strategyName()` | Registry — same pattern, `inputStrategy` map |
+| *(reuses existing)* `CandidateActionGenerator` | unchanged | Composite — discovered generators appended to the built-in composite's list |
+| `BrowserFactory` | `String type(); Browser create(BrowserConfig)` | Registry — `browser.type` resolves to a discovered factory if it isn't chromium/firefox/webkit |
+| `SessionProvider` | `Optional<AuthenticatedSession> createSession(Mission)` | First non-empty result wins, tried right after `browser.launch()`, before the mission executes |
+| `CredentialProvider` | `boolean supports(String); String resolve(String)` | Applied by `AegisConfigLoader` to `application.username`/`.password` |
+| `AuthenticatedSession` (record) | `cookies, localStorage, sessionStorage, headers, browserProfilePath` — pure data | Applied via new `Browser.applySession(...)` — cookies/headers immediately (context-level, pre-navigation), storage deferred to the mission's first real `navigate()` call (origin-scoped, no valid origin exists before that) then a reload, a profile path via relaunching through Playwright's `launchPersistentContext` |
+
+**Explicitly scoped down, not built as redundant machinery:**
+- **LLM Plugin** — already achievable: implement the frozen `LlmChatClient` interface, construct it directly. Any `Llm*` class already accepts one via constructor injection.
+- **Observer Plugin** — `DefaultObserver` (frozen) builds every `Observation` purely from `Browser.getButtons/getInputs/getLinks/getSelects()`. A plugin wanting different/additional element discovery provides those via a custom `Browser` (`BrowserFactory`), not a separate Observer interface.
+
+**Wiring:** `EngineFactory` gained a `create(Mission, BrowserConfig)` overload (existing 0/1-arg overloads delegate with `mission = null`, session-provider lookup simply skipped then); `Aegis.run()` now builds `MissionReportData` once and shares it across the 3 built-in generators (each gained a `generate(MissionReportData)` overload) and every discovered `ReportRenderer`, instead of each independently rebuilding it.
+
+## Stage 2 verification
+
+- 8 new unit tests: `AuthenticatedSessionTest` (null-collection normalization, factory methods), `CompositeAnomalyDetectorTest` (merge behavior via fakes), and 2 new `AegisConfigLoaderTest` cases that exercise a *real* discovered `CredentialProvider` via an actual `META-INF/services` test resource — not a hand-wired fake standing in for ServiceLoader. Full suite: 260/260 passing.
+- New `examples/plugin-example` module, depending on `aegis-core` directly (the extension points live there) — a real, working plugin jar: `SwagLabsFindingRule` (flags saucedemo.com's real page title — a guaranteed, unambiguous live signal), `MarkdownReportRenderer`, `EnvCredentialProvider` (resolves `env:VAR_NAME`), `DemoBrowserFactory` (proves custom `browser.type` resolution).
+- **Live-verified against `sample-saucedemo`, completely unmodified** — the plugin jar's compiled output added to the runtime classpath only: the `FindingRule` fired (`Finding [LOW] PLUGIN_DEMO: page title matched 'Swag Labs'`, and was later even picked up and severity-escalated by the existing frozen bug-clustering logic with zero special-casing), the `ReportRenderer` wrote a real 4th report file, the `CredentialProvider` correctly resolved `env:AEGIS_DEMO_PASSWORD` (confirmed by the mission reaching genuine `SUCCESS` — a wrong password would have failed login) and failed loudly and clearly when the env var was unset, and `DemoBrowserFactory` was genuinely invoked for `browser.type: demo-browser`. Confirmed `aegis-launcher`'s existing `SauceDemoMain` (no plugin jar on its classpath) still produces exactly 3 report formats, not 4 — plugins are purely classpath-driven, never silently always-on.
+- `Browser.applySession()` — the most novel new runtime behavior — smoke-tested directly against real Playwright in 3 scenarios: cookies+headers applied pre-navigation (no throw), localStorage/sessionStorage applied post-navigation-then-reload (confirmed via a real page reading the injected value back and setting its own title to it), and a persistent browser profile relaunch (confirmed via the profile directory actually being created on disk). Full "skip login entirely on a live site" wasn't proven live — would need a cooperating real backend issuing valid session tokens — noted honestly rather than faked.
+
+**This completes Stage 2 of 6.** Stages 3–6 are real, tracked, and not started.
 
 ---
 

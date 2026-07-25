@@ -14,10 +14,17 @@ import com.aegis.core.action.handler.TypeActionHandler;
 import com.aegis.core.action.handler.WaitActionHandler;
 import com.aegis.core.anomaly.AnomalyDetector;
 import com.aegis.core.anomaly.BrowserSignalAnomalyDetector;
+import com.aegis.core.anomaly.CompositeAnomalyDetector;
 import com.aegis.core.browser.Browser;
 import com.aegis.core.browser.BrowserConfig;
 import com.aegis.core.browser.playwright.PlaywrightBrowser;
 import com.aegis.core.llm.OpenAiCompatibleChatClient;
+import com.aegis.core.plugin.AuthenticatedSession;
+import com.aegis.core.plugin.BrowserFactory;
+import com.aegis.core.plugin.FindingRule;
+import com.aegis.core.plugin.NamedActionScorer;
+import com.aegis.core.plugin.NamedInputValueResolver;
+import com.aegis.core.plugin.SessionProvider;
 import com.aegis.core.resilience.ScreenshotSample;
 import com.aegis.core.resilience.SelfHealingBrowser;
 import com.aegis.core.controller.DefaultMissionController;
@@ -76,9 +83,14 @@ import com.aegis.core.reasoning.value.EdgeCaseInputValueResolver;
 import com.aegis.core.reasoning.value.InputValueResolver;
 import com.aegis.core.reasoning.value.InputValueResolverRegistry;
 import com.aegis.core.world.WorldModel;
+import com.aegis.model.mission.Mission;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.ServiceLoader;
 import java.util.function.Supplier;
 
 public final class EngineFactory {
@@ -110,6 +122,17 @@ public final class EngineFactory {
     }
 
     public static CreatedEngine create(BrowserConfig browserConfig) {
+        return create(null, browserConfig);
+    }
+
+    /**
+     * Mission-aware overload — needed so {@link SessionProvider} plugins
+     * (Stage 2 "Identity Integration") have a Mission to inspect when
+     * deciding whether/how to establish a session. {@code mission} may be
+     * null (the 1-arg overloads above pass null): session-provider
+     * lookup is simply skipped then, everything else is unaffected.
+     */
+    public static CreatedEngine create(Mission mission, BrowserConfig browserConfig) {
 
         /*
          * Browser
@@ -121,9 +144,29 @@ public final class EngineFactory {
          * Browser's contract (complete, or throw) is unchanged, only how
          * often it throws.
          */
-        SelfHealingBrowser selfHealingBrowser = new SelfHealingBrowser(new PlaywrightBrowser(browserConfig));
+        SelfHealingBrowser selfHealingBrowser = new SelfHealingBrowser(resolveBrowser(browserConfig));
         Browser browser = selfHealingBrowser;
         browser.launch();
+
+        /*
+         * Identity Integration (Stage 2) — establishes a pre-authenticated
+         * session, if any plugin provides one for this mission, before
+         * anything else happens. First provider to return a non-empty
+         * session wins; the plugin only ever hands back data (cookies/
+         * storage/headers/profile) — applying it to the browser is
+         * entirely AEGIS's own code (Browser.applySession), never the
+         * plugin's. From here on, the autonomous engine takes over exactly
+         * as if the site had been visited fresh and already logged in.
+         */
+        if (mission != null) {
+            for (SessionProvider provider : ServiceLoader.load(SessionProvider.class)) {
+                Optional<AuthenticatedSession> session = provider.createSession(mission);
+                if (session.isPresent()) {
+                    browser.applySession(session.get());
+                    break;
+                }
+            }
+        }
 
         /*
          * Visited-State Memory
@@ -165,10 +208,16 @@ public final class EngineFactory {
          * malformed values instead, for a dedicated input-validation
          * stress run — selected per mission via "inputStrategy".
          */
-        Map<String, InputValueResolver> inputStrategies = Map.of(
+        Map<String, InputValueResolver> inputStrategies = new LinkedHashMap<>(Map.of(
                 "realistic", new DefaultInputValueResolver(),
                 "edge-case", new EdgeCaseInputValueResolver()
-        );
+        ));
+
+        // Stage 2 "InputResolver" plugin — discovered resolvers register
+        // under their own strategyName(), alongside the 2 built-ins.
+        for (NamedInputValueResolver resolver : ServiceLoader.load(NamedInputValueResolver.class)) {
+            inputStrategies.put(resolver.strategyName(), resolver);
+        }
 
         InputValueResolverRegistry valueResolverRegistry =
                 new InputValueResolverRegistry(inputStrategies);
@@ -211,18 +260,23 @@ public final class EngineFactory {
          * "raceConditions") — see PageLevelCandidateActionGenerator /
          * DoubleClickCandidateActionGenerator / RaceClickCandidateActionGenerator.
          */
-        CandidateActionGenerator generator =
-                new CompositeCandidateActionGenerator(List.of(
-                        new GenericCandidateActionGenerator(
-                                mapper,
-                                actionFactory,
-                                valueResolverRegistry,
-                                confidenceEstimator
-                        ),
-                        new PageLevelCandidateActionGenerator(),
-                        new DoubleClickCandidateActionGenerator(mapper),
-                        new RaceClickCandidateActionGenerator(mapper)
-                ));
+        List<CandidateActionGenerator> generators = new ArrayList<>(List.of(
+                new GenericCandidateActionGenerator(
+                        mapper,
+                        actionFactory,
+                        valueResolverRegistry,
+                        confidenceEstimator
+                ),
+                new PageLevelCandidateActionGenerator(),
+                new DoubleClickCandidateActionGenerator(mapper),
+                new RaceClickCandidateActionGenerator(mapper)
+        ));
+
+        // Stage 2 "ActionProvider" plugin — no new interface needed,
+        // CandidateActionGenerator was already exactly this shape.
+        ServiceLoader.load(CandidateActionGenerator.class).forEach(generators::add);
+
+        CandidateActionGenerator generator = new CompositeCandidateActionGenerator(generators);
 
         /*
          * Execution Memory (already-executed actions)
@@ -273,7 +327,7 @@ public final class EngineFactory {
          * "automatic dynamic strategy switching" goal; every other
          * strategy here is a fixed, manually-chosen-per-mission choice.
          */
-        Map<String, ActionScorer> strategies = Map.ofEntries(
+        Map<String, ActionScorer> strategies = new LinkedHashMap<>(Map.ofEntries(
                 Map.entry("greedy", new HighestConfidenceActionScorer()),
                 Map.entry("random", new RandomActionScorer()),
                 Map.entry("risk-based", new RiskBasedActionScorer()),
@@ -286,7 +340,13 @@ public final class EngineFactory {
                 Map.entry("adaptive", new AdaptiveActionScorer(
                         new HighestConfidenceActionScorer(),
                         new CoverageAwareActionScorer(worldModel, visitedStateMemory)))
-        );
+        ));
+
+        // Stage 2 "MissionStrategy" plugin — discovered scorers register
+        // under their own strategyName(), alongside the 10 built-ins.
+        for (NamedActionScorer scorer : ServiceLoader.load(NamedActionScorer.class)) {
+            strategies.put(scorer.strategyName(), scorer);
+        }
 
         ActionScorerRegistry scorerRegistry =
                 new ActionScorerRegistry(strategies);
@@ -347,9 +407,18 @@ public final class EngineFactory {
 
         /*
          * Anomaly Detector
+         *
+         * Always wrapped in CompositeAnomalyDetector (Stage 2 "Finding
+         * Plugin") — with zero discovered FindingRule plugins this is
+         * functionally identical to using BrowserSignalAnomalyDetector
+         * directly, so there's no reason to special-case the "no plugins"
+         * path.
          */
+        List<FindingRule> findingRules = new ArrayList<>();
+        ServiceLoader.load(FindingRule.class).forEach(findingRules::add);
+
         AnomalyDetector anomalyDetector =
-                new BrowserSignalAnomalyDetector(browser);
+                new CompositeAnomalyDetector(new BrowserSignalAnomalyDetector(browser), findingRules);
 
         /*
          * Mission Engine
@@ -368,5 +437,30 @@ public final class EngineFactory {
         );
 
         return new CreatedEngine(engine, experienceRepository, selfHealingBrowser::capturedScreenshots);
+    }
+
+    /**
+     * Stage 2 "Browser Plugin": the 3 built-in Playwright engines resolve
+     * directly; anything else is looked up among discovered
+     * {@link BrowserFactory} plugins by exact (case-insensitive)
+     * {@link BrowserFactory#type()} match.
+     */
+    private static Browser resolveBrowser(BrowserConfig config) {
+
+        String type = config.type().toLowerCase();
+
+        if (type.equals("chromium") || type.equals("firefox") || type.equals("webkit")) {
+            return new PlaywrightBrowser(config);
+        }
+
+        for (BrowserFactory factory : ServiceLoader.load(BrowserFactory.class)) {
+            if (factory.type().equalsIgnoreCase(config.type())) {
+                return factory.create(config);
+            }
+        }
+
+        throw new IllegalArgumentException(
+                "Unknown browser type: " + config.type()
+                        + " (expected chromium, firefox, webkit, or a type registered by a BrowserFactory plugin)");
     }
 }
