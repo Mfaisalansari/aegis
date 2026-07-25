@@ -157,15 +157,26 @@ public final class EngineFactory {
          * entirely AEGIS's own code (Browser.applySession), never the
          * plugin's. From here on, the autonomous engine takes over exactly
          * as if the site had been visited fresh and already logged in.
+         *
+         * Wrapped in try/catch (Stage 5 hardening): a discovered
+         * SessionProvider is third-party plugin code, exactly the kind
+         * most likely to throw. Without this, an already-launched browser
+         * would leak its Playwright driver subprocess — DefaultMissionEngine
+         * doesn't exist yet to guarantee close() at this point.
          */
-        if (mission != null) {
-            for (SessionProvider provider : ServiceLoader.load(SessionProvider.class)) {
-                Optional<AuthenticatedSession> session = provider.createSession(mission);
-                if (session.isPresent()) {
-                    browser.applySession(session.get());
-                    break;
+        try {
+            if (mission != null) {
+                for (SessionProvider provider : ServiceLoader.load(SessionProvider.class)) {
+                    Optional<AuthenticatedSession> session = provider.createSession(mission);
+                    if (session.isPresent()) {
+                        browser.applySession(session.get());
+                        break;
+                    }
                 }
             }
+        } catch (RuntimeException e) {
+            browser.close();
+            throw e;
         }
 
         /*

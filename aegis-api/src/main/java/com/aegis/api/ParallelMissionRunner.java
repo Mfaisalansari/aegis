@@ -48,6 +48,14 @@ public final class ParallelMissionRunner {
                 futures.put(entry.getKey(), CompletableFuture.supplyAsync(() -> Aegis.run(mission, browserConfig), executor));
             }
 
+            // Stage 5 hardening: wait for every future to complete — success
+            // or failure — before reading any of them. Joining one at a time
+            // below would otherwise throw on the first failing future in
+            // map-iteration order while later missions are still running
+            // unawaited in the background, contradicting this class's own
+            // documented "propagates after all missions have finished".
+            CompletableFuture.allOf(futures.values().toArray(new CompletableFuture[0])).join();
+
             Map<String, AegisReport> results = new LinkedHashMap<>();
 
             for (Map.Entry<String, CompletableFuture<AegisReport>> entry : futures.entrySet()) {

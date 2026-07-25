@@ -29,6 +29,7 @@
         <slf4j.version>2.0.17</slf4j.version>
         <logback.version>1.5.18</logback.version>
         <snakeyaml.version>2.2</snakeyaml.version>
+        <playwright.version>1.54.0</playwright.version>
     </properties>
 
     <dependencyManagement>
@@ -66,8 +67,45 @@
                 <version>${snakeyaml.version}</version>
             </dependency>
 
+            <dependency>
+                <groupId>com.microsoft.playwright</groupId>
+                <artifactId>playwright</artifactId>
+                <version>${playwright.version}</version>
+            </dependency>
+
         </dependencies>
 
     </dependencyManagement>
+
+    <!--
+         Stage 5 "Performance & Quality" — test coverage. Inherited by
+         every module's default build (not pluginManagement, so it
+         actually runs without each module re-declaring it). Produces
+         target/site/jacoco/index.html per module on a real `mvn test`
+         run; not exercised in environments without a `mvn` binary.
+    -->
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.12</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 
 </project>

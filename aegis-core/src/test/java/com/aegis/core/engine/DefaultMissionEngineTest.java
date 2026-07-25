@@ -31,9 +31,60 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DefaultMissionEngineTest {
+
+    // Stage 5 hardening regression test: an unreachable/invalid baseUrl
+    // (a realistic, everyday failure) throwing out of the initial
+    // navigate() call must still close the browser — see the try/finally
+    // restructure in DefaultMissionEngine.execute().
+    @Test
+    void aThrowingInitialNavigateStillClosesTheBrowser() {
+
+        AtomicInteger closeCalls = new AtomicInteger();
+
+        Browser browser = new Browser() {
+            @Override public void launch() { }
+            @Override public void close() { closeCalls.incrementAndGet(); }
+            @Override public void navigate(String url) { throw new RuntimeException("simulated unreachable host"); }
+            @Override public void refresh() { throw new UnsupportedOperationException(); }
+            @Override public void goBack() { throw new UnsupportedOperationException(); }
+            @Override public void click(String locator) { throw new UnsupportedOperationException(); }
+            @Override public void doubleClick(String locator) { throw new UnsupportedOperationException(); }
+            @Override public void raceClick(String locator) { throw new UnsupportedOperationException(); }
+            @Override public void type(String locator, String text) { throw new UnsupportedOperationException(); }
+            @Override public void select(String locator) { throw new UnsupportedOperationException(); }
+            @Override public void scrollTo(String locator) { throw new UnsupportedOperationException(); }
+            @Override public String getPageTitle() { throw new UnsupportedOperationException(); }
+            @Override public String getCurrentUrl() { throw new UnsupportedOperationException(); }
+            @Override public List<ElementInfo> getButtons() { throw new UnsupportedOperationException(); }
+            @Override public List<ElementInfo> getInputs() { throw new UnsupportedOperationException(); }
+            @Override public List<ElementInfo> getLinks() { throw new UnsupportedOperationException(); }
+            @Override public List<ElementInfo> getSelects() { throw new UnsupportedOperationException(); }
+            @Override public List<AnomalySignal> drainAnomalies() { return List.of(); }
+        };
+
+        DefaultMissionEngine engine = new DefaultMissionEngine(
+                browser,
+                alwaysObserves(),
+                context -> completeAction(),
+                noOpExecutor(),
+                new DefaultMissionController(),
+                new ExecutionMemory(),
+                neverReachesGoal(),
+                noAnomalies(),
+                new WorldModel(),
+                noOpExperienceRecorder()
+        );
+
+        Mission mission = new Mission(UUID.randomUUID(), "Test", "Test", Map.of("baseUrl", "https://unreachable.invalid/"));
+
+        assertThrows(RuntimeException.class, () -> engine.execute(mission));
+
+        assertEquals(1, closeCalls.get());
+    }
 
     @Test
     void aThrowingStepIsRecordedAsAFindingInsteadOfCrashingTheMission() {

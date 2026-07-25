@@ -21,6 +21,12 @@ public record EnterpriseConfig(
         ReportConfig report
 ) {
 
+    // Stage 5 hardening — same defensive-copy pattern as AuthenticatedSession (Stage 2).
+    public EnterpriseConfig {
+        environments = environments == null ? Map.of() : Map.copyOf(environments);
+        missions = missions == null ? Map.of() : Map.copyOf(missions);
+    }
+
     public AegisConfig resolve(String environmentName, String missionName) {
 
         EnvironmentProfile environment = environments.get(environmentName);

@@ -26,6 +26,11 @@ public record AegisReport(
         Map<String, String> pluginReports
 ) {
 
+    // Stage 5 hardening — same defensive-copy pattern as AuthenticatedSession (Stage 2).
+    public AegisReport {
+        pluginReports = pluginReports == null ? Map.of() : Map.copyOf(pluginReports);
+    }
+
     public MissionStatus status() {
         return missionResult.status();
     }

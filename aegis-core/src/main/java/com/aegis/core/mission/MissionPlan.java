@@ -13,4 +13,9 @@ import java.util.List;
  * against a real page.
  */
 public record MissionPlan(List<String> steps) {
+
+    // Stage 5 hardening — same defensive-copy pattern as AuthenticatedSession (Stage 2).
+    public MissionPlan {
+        steps = steps == null ? List.of() : List.copyOf(steps);
+    }
 }

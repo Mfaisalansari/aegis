@@ -78,18 +78,23 @@ public class DefaultMissionEngine implements MissionEngine {
         MissionContext context = new MissionContext(mission);
         ExecutionState state = context.getExecutionState();
 
-        /*
-         * Navigate to the mission start page.
-         */
-        String startUrl = mission.parameter("baseUrl");
-
-        if (startUrl != null && !startUrl.isBlank()) {
-            browser.navigate(startUrl);
-        }
-
         Observation previousObservation = null;
 
         try {
+
+            /*
+             * Navigate to the mission start page.
+             *
+             * Inside the try (Stage 5 hardening): an unreachable/invalid
+             * baseUrl is a realistic, everyday failure — without this, it
+             * would throw before the finally below ever runs, leaking the
+             * browser's Playwright driver subprocess.
+             */
+            String startUrl = mission.parameter("baseUrl");
+
+            if (startUrl != null && !startUrl.isBlank()) {
+                browser.navigate(startUrl);
+            }
 
             while (controller.shouldContinue(context)) {
 

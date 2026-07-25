@@ -80,4 +80,20 @@ class EnterpriseConfigTest {
 
         assertTrue(e.getMessage().contains("load-test"));
     }
+
+    // Stage 5 hardening — same defensive-copy pattern as AuthenticatedSession (Stage 2).
+    @Test
+    void environmentsAndMissionsAreDefensivelyCopiedAndImmutable() {
+
+        java.util.Map<String, EnvironmentProfile> callerEnvironments = new java.util.HashMap<>(
+                Map.of("dev", new EnvironmentProfile(ApplicationConfig.defaults(), BrowserConfig.defaults())));
+
+        EnterpriseConfig config = new EnterpriseConfig(callerEnvironments, Map.of(), ReportConfig.defaults());
+
+        callerEnvironments.remove("dev");
+
+        assertEquals(1, config.environments().size());
+        assertThrows(UnsupportedOperationException.class, () -> config.environments().remove("dev"));
+        assertThrows(UnsupportedOperationException.class, () -> config.missions().put("x", null));
+    }
 }

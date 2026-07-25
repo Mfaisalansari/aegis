@@ -7,6 +7,7 @@ import com.aegis.model.reasoning.ReasoningStep;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 public class ExecutionState {
@@ -40,16 +41,21 @@ public class ExecutionState {
         this.observations.add(observation);
     }
 
+    // Stage 5 hardening: unmodifiable views, not copies — still reflect
+    // live growth as the mission runs (internal callers like
+    // MissionEngine are unaffected), but a caller reaching this through
+    // the public AegisReport.missionResult().context() chain can no
+    // longer mutate AEGIS's own internal state through the getter.
     public List<Observation> getObservations() {
-        return observations;
+        return Collections.unmodifiableList(observations);
     }
 
     public List<Action> getActions() {
-        return actions;
+        return Collections.unmodifiableList(actions);
     }
 
     public List<Finding> getFindings() {
-        return findings;
+        return Collections.unmodifiableList(findings);
     }
 
     public void addAction(Action action) {
@@ -66,7 +72,7 @@ public class ExecutionState {
     }
 
     public List<ReasoningStep> getReasoningSteps() {
-        return reasoningSteps;
+        return Collections.unmodifiableList(reasoningSteps);
     }
 
     public int getCurrentStep() {
