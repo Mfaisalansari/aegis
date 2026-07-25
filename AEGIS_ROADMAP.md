@@ -393,7 +393,7 @@ Live-verified against a real saucedemo.com run: all 3 EXECUTION events in that r
 
 ---
 
-# 🟢 Framework Adoption — Stages 1–3 of 6
+# 🟢 Framework Adoption — Stages 1–6 of 6 (complete)
 
 ## Status
 
@@ -402,9 +402,9 @@ This is a separate, much larger user-authored initiative beyond the original roa
 1. **Framework Adoption** — public SDK, config file, sample projects. Complete (2026-07-25).
 2. **Plugin Architecture** — extension points (browser/observer/finding/LLM/identity/report plugins). Complete (2026-07-25).
 3. **Enterprise Readiness** — mission/environment profiles, secret management, parallel execution, scheduling, CLI. Complete (2026-07-25).
-4. **Ecosystem** — full docs (user/architecture/plugin-dev guides, API reference, FAQ), a real `aegis` CLI (`init`/`report`/`validate`/`doctor` — `run` already shipped in Stage 3), IDE templates. Not started.
-5. **Performance & Quality** — benchmarking, memory/thread-safety review, API stability, dependency cleanup, test coverage. No new functionality. Not started.
-6. **Community Release** — README/CONTRIBUTING/CHANGELOG/license/versioning policy, GitHub Actions, issue templates. Not started.
+4. **Ecosystem** — full docs (user/architecture/plugin-dev guides, API reference, FAQ), a real `aegis` CLI (`init`/`report`/`validate`/`doctor` — `run` already shipped in Stage 3), IDE templates. Complete (2026-07-25).
+5. **Performance & Quality** — benchmarking, memory/thread-safety review, API stability, dependency cleanup, test coverage. No new functionality. Complete (2026-07-25).
+6. **Community Release** — README/CONTRIBUTING/CHANGELOG/license/versioning policy, GitHub Actions, issue templates. Complete (2026-07-25).
 
 ## Stage 1 exit criteria
 
@@ -521,7 +521,95 @@ New `aegis-api` types: `EnvironmentProfile`, `MissionProfile`, `EnterpriseConfig
 - **Live-verified the CLI against a real 2-environment/2-mission config, targeting saucedemo.com, through the actual `CliMain` logic** (manual-classpath technique — no `mvn` binary in this sandbox, so the shade-jar *packaging* itself couldn't be built/run here; stated honestly rather than faked, while every line of `CliMain`'s own logic ran for real): `--env dev --mission smoke-test` resolved correctly, the built-in `EnvCredentialProvider` resolved `env:AEGIS_ENTERPRISE_TEST_PASSWORD` with no plugin jar on the classpath (confirmed via the real password value reaching the login form), `headless`/custom `report.directory` were honored, mission reached real `SUCCESS`, **exit code 0**. Confirmed the missing-`--env`/`--mission` error path (exit code 1, clear message) and a genuinely `FAILED` mission (exit code 1) separately.
 - **Live-verified `ParallelMissionRunner`** running SauceDemo + OrangeHRM concurrently: both reached real `SUCCESS` in 11.4s combined (well under what two sequential runs would take, given OrangeHRM alone typically takes 10s+) — real concurrency, not simulated. A transient error surfaced mid-run under the concurrent load and was caught and recovered by the existing (Phase 9) self-healing retry logic with no special handling needed.
 
-**This completes Stage 3 of 6.** Stages 4–6 are real, tracked, and not started.
+**This completes Stage 3 of 6.**
+
+---
+
+## Stage 4 exit criteria
+
+Full docs, a rounded-out CLI, and IDE templates — making AEGIS approachable to a new consumer without reading source.
+
+## Stage 4 design
+
+Three deliverables, all additive/documentation+CLI-only — zero `aegis-core`/`aegis-model` changes, nothing on the Stable Components list touched.
+
+**Docs.** `ARCHITECTURE.md` was a real gap — a skeleton of bare section headers with almost no prose — rewritten with real content: component responsibilities, the runtime flow as prose, Design Principles with one concrete example each from this codebase, a "Why This Architecture?" comparison against scripted Selenium/Playwright tests, and a new Extension Points section cross-referencing USAGE.md §8b rather than duplicating it. `USAGE.md` already served as a solid task-oriented user guide, so Stage 4 didn't rebuild it — it gained a new §8d for the 4 new CLI subcommands and a §10 pointer to the 2 new docs. New **`API_REFERENCE.md`**: a systematic, lookup-oriented reference (one table per module) for the entire versioned public surface — `aegis-model`, `aegis-core` (including every `com.aegis.core.plugin` interface's exact signature), `aegis-api`. New **`FAQ.md`**: real recurring questions, answered by reusing already-established honest framing (no new claims invented) — how AEGIS differs from scripted tests, whether learning persists across runs, why no PDF export, whether AEGIS is on Maven Central yet (no — still SNAPSHOT).
+
+**`aegis-cli` rounded out to 5 subcommands.** `CliMain` became a thin dispatcher; the existing `run` logic moved unchanged into `RunCommand`. Same manual-parsing style as Stage 3 (no CLI-parsing library dependency), same `SUCCESS`→0/`FAILED`→1/`PARTIAL`→2 exit-code convention wherever a subcommand reports a mission outcome.
+
+- **`init <directory> [--name] [--base-url]`** — scaffolds a standalone Maven project depending only on `aegis-api`, copying `samples/sample-saucedemo`'s exact `AegisApplication`/`Launcher.run(...)` shape via classpath-resource templates (`aegis-cli/src/main/resources/templates/starter-app/*.template`, plain `String.replace` placeholder substitution — no templating engine dependency). Refuses to run into a non-empty directory. **This is also the "IDE templates" deliverable** — the generated project needs no IDE-specific plugin or archetype (same as every `samples/*` module already), so a separate IDE-specific generator was deliberately not built on top of it.
+- **`validate --config <path> [--env] [--mission]`** — pure static check reusing `EnterpriseConfigLoader`/`AegisConfigLoader` with zero new parsing logic; prints a resolved-config summary with `password` always redacted; never launches a browser.
+- **`report <path-to-json-report>`** — reads a `.json` report `Launcher` already writes every run (`ObjectMapper.readTree`, same tree-API style `JsonReportGenerator` itself uses) and prints a compact summary with an exit code mirroring the report's own mission status. Deliberately doesn't reconstruct text/HTML from JSON — `Launcher` already writes all 3 formats every run, and a full JSON→`MissionReportData` deserializer would be new machinery for a need nobody has.
+- **`doctor`** — a real environment checklist: Java version (`Runtime.version()`), a live per-engine Playwright launch probe (chromium/firefox/webkit — not a guess from file existence), and which `AEGIS_LLM_*` variables are set (informational only, values never printed).
+
+## Stage 4 verification
+
+- 19 new unit tests across `InitCommandTest`, `ValidateCommandTest`, `ReportCommandTest`, `DoctorCommandTest`, `RunCommandTest` (argument-parsing/error-path coverage for the logic moved out of the old `CliMain`). Full suite: 293/293 passing (was 274/274).
+- **Live-verified every subcommand for real** (manual-classpath technique — no `mvn` binary in this sandbox, so only the shade-jar *packaging* itself stays unverified, same honestly-stated limitation as Stage 3; every subcommand's own logic ran for real): `init` generated a real standalone project, compiled against nothing but `aegis-api`'s own build output (+ its transitive dependencies — the same "prove the SDK boundary for real" style as Stage 1's sample verification), and its `Main` reached genuine `SUCCESS` against saucedemo.com; `report` against that run's real JSON output printed a summary whose numbers matched the real run; `validate` against Stage 3's real 2-environment/2-mission fixture correctly resolved with credentials redacted (exit 0), correctly failed on a missing `--env`/`--mission` and an unknown mission name (exit 1 with the exact known-names list `EnterpriseConfig.resolve` already produces); `doctor` run for real reported the sandbox's actual Java 25 runtime and all 3 real Playwright engines launching successfully. `run` was also re-verified end-to-end through the new `CliMain` dispatcher (not just `RunCommand` directly) to confirm the refactor didn't change its behavior.
+
+**This completes Stage 4 of 6.**
+
+---
+
+## Stage 5 exit criteria
+
+Benchmarking, memory/thread-safety review, API stability, dependency cleanup, test coverage — explicitly **no new functionality**. Unlike Stages 1–4, this isn't a new-capability stage — it's a hardening pass over what already exists.
+
+## Stage 5 design
+
+A real review (not a re-assertion of Stage 3's earlier "parallel execution is safe" claim) found concrete, fixable issues rather than inventing busywork. The two most important are genuine resource leaks in the core mission-execution path.
+
+**Two real resource leaks, both fixed:**
+- `EngineFactory.create()` launched the browser, then ran `SessionProvider`/`browser.applySession(...)` (Stage 2 plugin code — exactly the kind most likely to throw) with no try/catch. A throwing plugin leaked the already-launched Playwright driver subprocess, since `DefaultMissionEngine` (and its own close-guaranteeing `finally`) didn't exist yet at that point. Fixed: wrapped in try/catch, closes the browser and rethrows.
+- `DefaultMissionEngine.execute()`'s initial `browser.navigate(startUrl)` call ran *before* the `try { ... } finally { browser.close(); }` block wrapping the rest of the method. An unreachable/invalid `baseUrl` — a realistic, everyday failure — leaked the browser. Fixed: moved inside the try block.
+
+**`ParallelMissionRunner`'s contract didn't match its implementation.** Its own javadoc promised failures propagate "after all missions have finished (not fail-fast/cancel-the-others)," but joining futures one at a time in map order meant an earlier-ordered failure threw immediately while later missions kept running unawaited in the background. Fixed with `CompletableFuture.allOf(...).join()` before reading any individual future — now genuinely waits for every mission to finish first.
+
+**API stability — defensive copying**, extending the pattern `AuthenticatedSession` (Stage 2) already established: `Mission.parameters`, `AegisReport.pluginReports`, `MissionPlan.steps`, `EnterpriseConfig.environments`/`.missions` all gained compact constructors that normalize null→empty and copy mutable collections. `Mission` and `AegisReport` are explicitly part of the versioned public API, and Stage 3's parallel-safety claim implicitly assumes no shared mutable state — this closes a real loophole (a caller constructing `Mission` directly, bypassing `MissionBuilder`'s already-safe `Map.copyOf`, could otherwise mutate a map two concurrently running missions both observe). `ExecutionState`'s 4 list getters (reachable externally via `AegisReport.missionResult().context()`) now return `Collections.unmodifiableList(...)` views instead of the live internal list directly — still reflect growth during a running mission, just block external mutation. Also added `serialVersionUID` to `AegisConfigException`/`LlmClientException` — the only 2 compiler warnings (`-Xlint:all`) anywhere in `aegis-model`/`aegis-core`/`aegis-api`.
+
+**Dependency cleanup**: Playwright's version was hardcoded directly in `aegis-core/pom.xml`, the one dependency not flowing through the root `dependencyManagement` pattern every other one already used — moved it there. (Reviewed and found clean: `exec-maven-plugin`/`maven-shade-plugin` versions already consistent everywhere used; `aegis-launcher`'s dependencies all genuinely imported, confirmed via grep.)
+
+**Test coverage**: `aegis-model` had **zero** tests despite `ExecutionState`/`MissionContext` containing real, previously-untested logic — new `ExecutionStateTest`/`MissionContextTest`. Every fix above got a regression test, including a real `ServiceLoader`-discovered test `BrowserFactory`/`SessionProvider` pair (same discipline as `AegisConfigLoaderTest`'s `CredentialProvider` coverage) proving `EngineFactory.create()` still closes the browser when a session provider throws. New JaCoCo plugin config in the root `pom.xml` for future `mvn test` coverage reports — stated plainly, same as the shade-jar packaging in Stages 3–4, that it can't be executed/verified in this sandbox (no `mvn` binary).
+
+**Benchmarking**: new `BenchmarkMain` in `aegis-launcher` (dev-harness module, same category as its existing `*Main` classes — not shipped product surface). Runs a real SauceDemo login mission 5× headless with the `greedy` strategy and reports timing.
+
+## Stage 5 verification
+
+- 22 new unit tests (`ExecutionStateTest`, `MissionContextTest`, `MissionTest`, `MissionPlanTest`, `EngineFactoryResourceLeakTest`, plus additions to `AegisReportTest`/`EnterpriseConfigTest`/`DefaultMissionEngineTest`). Full suite: 313/313 passing (was 293/293). Full recompile of every module confirmed zero regressions from the pom.xml dependency-management change.
+- **Live-verified all 3 fixes against real Playwright/real sites, checking real OS process counts, not just unit-test doubles:**
+  - A `SessionProvider` throwing (real chromium browser launched via `EngineFactory.create()`) — exception propagated as expected, browser/Playwright process count unchanged before/after (32→32).
+  - A real mission pointed at an unreachable host (`ERR_NAME_NOT_RESOLVED`) — self-healing's retry-once fired, the exception still propagated after the retry, browser/Playwright process count unchanged before/after (32→32).
+  - `ParallelMissionRunner` given a batch of one fast-failing mission (bad host) ordered first and one slower real successful mission (SauceDemo login) ordered second — the exception only surfaced after **5841ms**, well past what the fast-failing mission alone would take, confirming it genuinely waited for the slower mission to finish first, matching the class's own documented contract.
+- **Real benchmark numbers** (`BenchmarkMain`, 5 runs, SauceDemo login, headless, `greedy`, this sandbox): min 2912ms, max 7421ms (first run — JVM/Playwright driver cold start), mean 3999ms, median 3111ms, aggregate 0.75 actions/sec (15 actions / 19993ms across all 5 runs). All 5 runs reached real `SUCCESS`.
+
+**This completes Stage 5 of 6.**
+
+---
+
+## Stage 6 exit criteria
+
+README/CONTRIBUTING/CHANGELOG/license/versioning policy, GitHub Actions, issue templates — the standard scaffolding an open-source repo needs before outside contributors show up.
+
+## Stage 6 design
+
+License chosen with the user: **Apache 2.0** (matches Playwright/Jackson/SnakeYAML, AEGIS's own major dependencies).
+
+- **`LICENSE`** — full Apache 2.0 text.
+- **`README.MD`** — gained a concise front-door section at the very top (badges, one-line pitch, doc links, license) — purely additive; the existing full sprint-by-sprint build log below is untouched, now explicitly framed as "detailed build log, not required reading to get started."
+- **`CONTRIBUTING.md`** (new) — the real contributor workflow (`mvn clean install`/`mvn test`, not this session's manual-`javac` sandbox workaround), pointers to the frozen Stable Components list and the project's own Working Agreement, and a Versioning Policy section (SemVer, `1.0.0-SNAPSHOT` today, tagging/publishing stays a deliberate maintainer action — same precedent Phase 10 already established).
+- **`CHANGELOG.md`** (new) — Keep a Changelog format, condensed one-bullet-per-phase/stage from the real history already in this document and `README.MD`.
+- **`.github/workflows/ci.yml`** (new) — JDK 23, installs Playwright's chromium binary, then `mvn -B clean verify` on every push/PR to `main`. Confirmed via grep before writing this that the unit test suite doesn't require real browsers to pass (every `Browser`-touching test uses a hand-written fake); the install step is there anyway to keep CI closer to a real build rather than silently masking a browser-launch failure as "not available."
+- **`.github/ISSUE_TEMPLATE/bug_report.md`**, **`.github/ISSUE_TEMPLATE/feature_request.md`**, **`.github/PULL_REQUEST_TEMPLATE.md`** — standard GitHub template format, referencing this project's own frozen-components/Working-Agreement conventions.
+- **Deliberately not done**: bumping the version past `1.0.0-SNAPSHOT` or cutting/tagging an actual release — same precedent as Phase 10, a maintainer's deliberate action, never a side effect of finishing a roadmap stage. No second "nightly smoke test" workflow for AEGIS's own repo — the one already documented in USAGE.md §8c is correctly scoped as an example for AEGIS's *consumers* testing *their own* app; this repo has no real target site/credentials to run such a job against itself.
+
+## Stage 6 verification
+
+- New YAML (`ci.yml`) validated for syntax.
+- Confirmed via grep that no existing test calls `Playwright.create()`/launches a real browser and asserts success — `aegis-cli`'s `DoctorCommandTest` is the one test that touches real `Playwright.create()`, and it only asserts the checklist completes, not that every engine is installed — so `mvn test` genuinely doesn't need the browser-install step to pass; it's included in CI anyway for realism.
+- This stage is docs/CI-config only — no `.java` file changed. Full existing suite re-run to confirm (313/313, unchanged from Stage 5).
+- Stated honestly: this sandbox has no `mvn` binary, so `ci.yml` itself can't be executed here — same limitation already established for the shade-jar packaging in Stages 3–4.
+
+**This completes Stage 6 of 6 — the full Framework Adoption initiative.**
 
 ---
 

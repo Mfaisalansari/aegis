@@ -2,6 +2,22 @@
 
 > Moving QA from deterministic automation to autonomous exploratory testing.
 
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![CI](https://github.com/Mfaisalansari/aegis/actions/workflows/ci.yml/badge.svg)](https://github.com/Mfaisalansari/aegis/actions/workflows/ci.yml)
+
+AEGIS is a Java/Maven autonomous exploratory QA agent built on Playwright: point it at a web app with a goal (e.g. "log in successfully"), and it observes the live page, reasons about the best next action, executes it, and learns from what happened — no scripted click sequence to maintain.
+
+**New here? Start with [`USAGE.md` §0](USAGE.md#0-sdk-quick-start-recommended-starting-point)** for the fastest path to a working mission. From there:
+
+- [`USAGE.md`](USAGE.md) — the full user guide: configuration, exploration strategies, LLM setup, writing missions/plugins, the `aegis` CLI.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — how the pipeline fits together and why it's shaped this way.
+- [`API_REFERENCE.md`](API_REFERENCE.md) — the versioned public API, by module.
+- [`FAQ.md`](FAQ.md) — answers to recurring questions.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to build, test, and submit changes.
+- [`AEGIS_ROADMAP.md`](AEGIS_ROADMAP.md) — authoritative status of every phase/stage, what's done and what's explicitly out of scope.
+
+Licensed under [Apache 2.0](LICENSE). Everything below this point is the project's detailed sprint-by-sprint build log — useful for understanding *why* a given piece of the design looks the way it does, not required reading to get started.
+
 ---
 
 # Vision
@@ -970,7 +986,59 @@ Exit criteria: *"Can be integrated into CI/CD pipelines with minimal setup."* Th
 
 **Live-verified the CLI against a real 2-environment/2-mission config targeting saucedemo.com**, through `CliMain`'s actual logic (no `mvn` here, so the shade-jar packaging itself couldn't be exercised in this sandbox — said plainly, not faked): environment+mission resolution worked, the built-in `EnvCredentialProvider` resolved a real secret with zero plugin jar involved, `headless`/custom report directory were honored, mission reached real `SUCCESS`, **exit code 0**. Separately confirmed the missing-flags error path and a genuinely `FAILED` mission both exit `1`. **Live-verified `ParallelMissionRunner`** running SauceDemo + OrangeHRM concurrently — both reached real `SUCCESS` in 11.4s combined, well under sequential time, with a transient mid-run error caught and recovered by the existing self-healing retry logic under the concurrent load.
 
-**This completes Stage 3 of 6.** Stages 4–6 (ecosystem/CLI, performance & quality, community release) are real, tracked in `AEGIS_ROADMAP.md`, and not started.
+**This completes Stage 3 of 6.**
+
+---
+
+## Sprint 41 — Framework Adoption, Stage 4 of 6: Ecosystem (Complete)
+
+Exit criteria: full docs, a rounded-out CLI, and IDE templates — making AEGIS approachable to a new consumer without reading source. All three deliverables are additive/documentation+CLI-only — zero `aegis-core`/`aegis-model` changes.
+
+- ✅ **`ARCHITECTURE.md` rewritten** with real content — it had been a skeleton of bare section headers with almost no prose. Now covers component responsibilities, the runtime flow, Design Principles with concrete examples from this codebase, a "Why This Architecture?" comparison against scripted test tools, and a new Extension Points section.
+- ✅ **New `API_REFERENCE.md`** — a systematic, lookup-oriented reference (one table per module) for the entire versioned public surface, complementing `USAGE.md`'s task-oriented guide rather than duplicating it.
+- ✅ **New `FAQ.md`** — real recurring questions, answered by reusing already-established honest framing rather than inventing new claims.
+- ✅ **`aegis-cli` rounded out to 5 subcommands**: `CliMain` became a thin dispatcher, existing `run` logic moved unchanged into `RunCommand`. New `init` (scaffolds a standalone starter project via bundled classpath-resource templates — no templating engine dependency — and doubles as the "IDE templates" deliverable, since the generated Maven project needs no IDE-specific plugin), `validate` (pure static config check, `password` always redacted, no browser launched), `report` (summarizes an existing JSON report with a mirrored exit code — deliberately doesn't reconstruct text/HTML from JSON), `doctor` (Java version + a real per-engine Playwright launch probe + which `AEGIS_LLM_*` vars are set).
+- 19 new unit tests. Full suite: 293/293 passing.
+
+**Live-verified every subcommand for real** (same manual-classpath technique as Stage 3 — no `mvn` binary in this sandbox, so only the shade-jar packaging itself stayed unverified): `init` generated a real project that compiled against nothing but `aegis-api`'s own build output and reached genuine `SUCCESS` against saucedemo.com; `report` against that run's real JSON output printed a summary matching the real numbers; `validate` against Stage 3's real enterprise fixture correctly resolved (redacted) and correctly failed on missing flags/an unknown mission name; `doctor` reported the sandbox's real Java 25 runtime and all 3 real Playwright engines launching. `run` was re-verified through the new dispatcher to confirm the refactor changed nothing behaviorally.
+
+**This completes Stage 4 of 6.**
+
+---
+
+## Sprint 42 — Framework Adoption, Stage 5 of 6: Performance & Quality (Complete)
+
+Exit criteria: benchmarking, memory/thread-safety review, API stability, dependency cleanup, test coverage — explicitly no new functionality. Unlike Stages 1–4, a hardening pass rather than a new-capability stage. A real review (not a re-assertion of Stage 3's earlier claims) found concrete, fixable issues instead of inventing busywork.
+
+- ✅ **Two real resource leaks, fixed**: `EngineFactory.create()` launched the browser, then ran `SessionProvider`/`browser.applySession(...)` (Stage 2 plugin code) with no try/catch — a throwing plugin leaked the Playwright driver subprocess. `DefaultMissionEngine.execute()`'s initial `navigate(startUrl)` ran before the `try/finally` guaranteeing `browser.close()` — an unreachable/invalid `baseUrl` (a realistic, everyday failure) leaked the browser too. Both fixed.
+- ✅ **`ParallelMissionRunner`'s own documented contract didn't match its implementation** — joining futures one at a time meant an earlier-ordered failure could throw while later missions were still running, unawaited, contradicting its own javadoc. Fixed with `CompletableFuture.allOf(...).join()` first.
+- ✅ **API stability**: defensive-copy compact constructors added to `Mission`/`AegisReport`/`MissionPlan`/`EnterpriseConfig` (extending the pattern `AuthenticatedSession` already established in Stage 2); `ExecutionState`'s 4 list getters now return unmodifiable views instead of live internal lists; `serialVersionUID` added to both custom exception classes (the only 2 compiler warnings anywhere in the project).
+- ✅ **Dependency cleanup**: Playwright's version centralized into the root `pom.xml`'s `dependencyManagement`, matching every other dependency.
+- ✅ **Test coverage**: `aegis-model` had zero tests despite real logic in `ExecutionState`/`MissionContext` — added. Every fix above got a regression test. New JaCoCo plugin config for future `mvn test` coverage reports.
+- ✅ **Benchmarking**: new `BenchmarkMain` (`aegis-launcher`) — 5 real headless SauceDemo login runs.
+- 22 new unit tests. Full suite: 313/313 passing (was 293/293).
+
+**Live-verified all 3 fixes against real Playwright/real sites**, checking real OS process counts rather than trusting unit-test doubles alone: a throwing `SessionProvider` and an unreachable-host navigation both left the browser/Playwright process count unchanged (32→32) after the exception propagated; `ParallelMissionRunner` given a fast-failing mission ordered before a slower real successful one only surfaced its exception after **5841ms** — well past the fast failure alone — confirming it genuinely waits for every mission to finish. **Real benchmark numbers** (5 runs, SauceDemo login, headless): min 2912ms / max 7421ms (cold start) / mean 3999ms / median 3111ms / 0.75 actions/sec aggregate — all 5 reached real `SUCCESS`.
+
+**This completes Stage 5 of 6.**
+
+---
+
+## Sprint 43 — Framework Adoption, Stage 6 of 6: Community Release (Complete)
+
+Exit criteria: README/CONTRIBUTING/CHANGELOG/license/versioning policy, GitHub Actions, issue templates — the last of the 6-stage Framework Adoption initiative. License chosen with the user: Apache 2.0.
+
+- ✅ **`LICENSE`** (Apache 2.0) at the repo root.
+- ✅ **`README.MD`** gained a concise front-door section at the top (badges, pitch, doc links) — additive, the full sprint log below stays untouched.
+- ✅ **`CONTRIBUTING.md`** (new) — the real `mvn`-based contributor workflow, Working Agreement/Stable Components pointers, a Versioning Policy section.
+- ✅ **`CHANGELOG.md`** (new) — Keep a Changelog format, condensed from this document's own history.
+- ✅ **`.github/workflows/ci.yml`** (new) — JDK 23, Playwright chromium install, `mvn -B clean verify` on every push/PR.
+- ✅ **Issue and PR templates** (new) — bug report, feature request, pull request.
+- Deliberately not done: bumping the version or cutting a real release (same Phase 10 precedent — a deliberate maintainer action); a second CI workflow testing some non-existent "AEGIS's own production site" (there isn't one — the nightly-smoke-test example in USAGE.md §8c is correctly scoped to AEGIS's *consumers*).
+
+Verified: confirmed via grep that the existing test suite needs no real browser to pass before finalizing `ci.yml`; validated the new YAML's syntax; full existing suite re-run unchanged at 313/313 (docs/CI-only stage, no `.java` file touched).
+
+**This completes Stage 6 of 6 — the full Framework Adoption initiative (Stages 1–6) is now done.**
 
 ---
 
@@ -1039,10 +1107,10 @@ v1.0.0-SNAPSHOT
 
 Current State
 
-**Rule-Based Autonomous QA Agent, with five independent opt-in AI-assisted decision points** (`explorationStrategy: llm` candidate scoring, mission-plan preview, bug explanation, recommendation, natural-language mission parsing — see Phase 8), plus adaptive/coverage-aware exploration, self-healing execution with real live screenshot capture, a public SDK (`aegis-api`: `AegisApplication`, `MissionBuilder`, YAML config, `Launcher`) with 3 working sample projects, a `ServiceLoader`-based plugin architecture with a real worked-example plugin module, and enterprise readiness — environment/mission profiles, parallel execution, built-in secret resolution, and a real `aegis-cli` command with CI/CD-ready exit codes. Every roadmap phase (0 through 10) is complete, plus real screenshot capture (Sprint 37) and Stages 1–3 of the 6-stage Framework Adoption initiative (Sprints 38–40).
+**Rule-Based Autonomous QA Agent, with five independent opt-in AI-assisted decision points** (`explorationStrategy: llm` candidate scoring, mission-plan preview, bug explanation, recommendation, natural-language mission parsing — see Phase 8), plus adaptive/coverage-aware exploration, self-healing execution with real live screenshot capture, a public SDK (`aegis-api`: `AegisApplication`, `MissionBuilder`, YAML config, `Launcher`) with 3 working sample projects, a `ServiceLoader`-based plugin architecture with a real worked-example plugin module, enterprise readiness — environment/mission profiles, parallel execution, built-in secret resolution — a real 5-subcommand `aegis-cli` (`run`/`init`/`validate`/`report`/`doctor`) with CI/CD-ready exit codes backed by full architecture/API-reference/FAQ documentation, a hardened core free of the 2 resource leaks and API-stability gaps a real Stage 5 review found and fixed, and full open-source scaffolding (Apache 2.0 license, `CONTRIBUTING.md`, `CHANGELOG.md`, CI, issue/PR templates). Every roadmap phase (0 through 10) is complete, plus real screenshot capture (Sprint 37) and all 6 stages of the Framework Adoption initiative (Sprints 38–43) — **that initiative is now fully done.**
 
 Honest framing, unchanged from every earlier sprint's own discipline: rule-based is still the *default* everywhere, not AI. Every LLM-backed feature is opt-in, falls back to a deterministic rule-based implementation on any failure, and candidate generation/input values/anomaly classification stay fully deterministic. "AEGIS v1.0" means the roadmap's original six deliverables are real and shipped — it doesn't mean AI-by-default; that would be a different, larger milestone this project hasn't taken on.
 
 Next Milestone
 
-**Stage 4 of Framework Adoption: Ecosystem** — full docs (user/architecture/plugin-dev guides, API reference, FAQ), rounding out `aegis-cli` with `init`/`report`/`validate`/`doctor` (`run` already shipped in Stage 3), IDE starter templates. Not started. Stages 5–6 (performance & quality, community release) queue up after that — see `AEGIS_ROADMAP.md`. Separately, the older v1.1+ candidates from before this initiative are still real but not scheduled: an AI-backed decision-maker as the *default* rather than opt-in; cross-run experience persistence; a published/tagged release now that the version line has moved to `1.0.0-SNAPSHOT`.
+**The 6-stage Framework Adoption initiative is complete** — see `AEGIS_ROADMAP.md` for the full stage-by-stage record. What's left is the older v1.1+ candidate list from before that initiative, still real but not scheduled: an AI-backed decision-maker as the *default* rather than opt-in; cross-run experience persistence; and — now that `CONTRIBUTING.md`'s versioning policy exists — actually cutting and publishing a real tagged `1.0.0` release, a deliberate action for the user to take when ready rather than something done as a side effect of any roadmap stage.
