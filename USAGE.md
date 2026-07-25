@@ -438,7 +438,71 @@ jobs:
 
 ("Mission scheduling" is deliberately not an AEGIS feature — a CI/CD system's own cron trigger already does this well; AEGIS's job is being a clean, exit-code-driven one-shot command such a scheduler can call.)
 
-`aegis-cli`'s scope is deliberately just `run` — `init`/`report`/`validate`/`doctor` are Stage 4 ("Ecosystem"), a separate, later initiative.
+`aegis-cli` also has 4 more subcommands (`init`/`validate`/`report`/`doctor`) — see §8d.
+
+---
+
+## 8d. The `aegis` CLI: init, validate, report, doctor
+
+Stage 4 "Ecosystem" rounds `aegis-cli` out from just `run` (§8c) to 5 subcommands total: `run`, `init`, `validate`, `report`, `doctor`. `java -jar aegis-cli.jar <command> ...` — run any command with no further arguments to see its own usage.
+
+### `aegis init` — scaffold a standalone starter project
+
+```
+aegis init <directory> [--name <appName>] [--base-url <url>]
+```
+
+Generates a plain Maven project depending only on `aegis-api` — `pom.xml`, `application.yml`, and two small Java classes copying `samples/sample-saucedemo`'s exact `AegisApplication`/`Launcher.run(...)` shape. Refuses to run if `<directory>` already exists and is non-empty (never overwrites). It's a normal Maven module with no special IDE plugin needed — open it directly in IntelliJ/VS Code/Eclipse/etc; this doubles as AEGIS's "IDE templates" deliverable (see FAQ.md for why a separate IDE-specific generator wasn't built on top of it).
+
+```
+$ aegis init my-app --name MyApp --base-url https://example.com/
+Created MyApp in /path/to/my-app
+
+Next steps:
+  cd my-app
+  # edit application.yml, then:
+  mvn compile exec:java
+```
+
+### `aegis validate` — check a config without running a mission
+
+```
+aegis validate --config <path> [--env <name>] [--mission <name>]
+```
+
+Parses and resolves the config exactly like `aegis run` would (same shape detection, same `--env`/`--mission` requirement for an enterprise-shaped config), then prints a summary — `password` always shown as `<redacted>`, never the real value. No browser is launched. Exit `0` if it resolves cleanly, `1` on any config error (bad YAML, missing file, unknown environment/mission). Useful as a fast CI pre-flight step before the real `run`.
+
+### `aegis report` — summarize an existing JSON report
+
+```
+aegis report <path-to-json-report>
+```
+
+Reads one of the `.json` files `aegis run`/`Launcher` already writes on every mission, and prints a compact summary — mission name/status/duration, coverage, findings count, top bug clusters, the recommendation line. Exit code mirrors the report's own mission status (`0`=SUCCESS/`1`=FAILED/`2`=PARTIAL), so it can gate a separate CI step from the one that produced the report (e.g. "did last night's scheduled run pass?"). It only reads — it doesn't regenerate the text/HTML formats from JSON, since `aegis run` already writes all three every time.
+
+### `aegis doctor` — environment checklist
+
+```
+aegis doctor
+```
+
+No config needed. Checks the Java version, live-probes whether each Playwright browser engine (chromium/firefox/webkit) actually launches, and reports which `AEGIS_LLM_*` variables are set (informational only — every LLM feature is opt-in). Exit `0` if Java 23+ and at least chromium are available, `1` otherwise.
+
+```
+$ aegis doctor
+AEGIS doctor
+
+✓ Java version: 23...
+✓ Playwright chromium: available
+✓ Playwright firefox: available
+✓ Playwright webkit: available
+
+LLM environment variables (all optional — every LLM feature is opt-in):
+  - AEGIS_LLM_BASE_URL : not set
+  ...
+
+Everything needed to run a mission is in place.
+```
 
 ---
 
@@ -459,5 +523,7 @@ jobs:
 ## 10. Where to look next
 
 - `ARCHITECTURE.md` — the pipeline shape and design rationale (Observe → Reason → Explore → Learn loop).
+- `API_REFERENCE.md` — systematic, lookup-oriented reference for every public type/method (this guide is task-oriented; that one is signature-oriented).
+- `FAQ.md` — short answers to recurring questions (how AEGIS differs from scripted tests, whether learning persists, why no PDF export, ...).
 - `AEGIS_ROADMAP.md` — authoritative phase-by-phase status, what's done, what's explicitly out of scope, and why.
 - `README.MD` — the detailed sprint-by-sprint build log, including honest limitations for every feature.
