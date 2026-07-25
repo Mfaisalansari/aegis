@@ -1,5 +1,6 @@
 package com.aegis.core;
 
+import com.aegis.core.browser.BrowserConfig;
 import com.aegis.core.bug.BugExplainer;
 import com.aegis.core.bug.LlmBugExplainer;
 import com.aegis.core.bug.LlmRecommendationEngine;
@@ -41,6 +42,11 @@ public final class Aegis {
     }
 
     public static AegisReport run(Mission mission) {
+        return run(mission, BrowserConfig.defaults());
+    }
+
+    /** Same as {@link #run(Mission)}, with control over browser engine/headless mode instead of the chromium/headed default. */
+    public static AegisReport run(Mission mission, BrowserConfig browserConfig) {
 
         // Generated before execution — a preview of intent, not something
         // the live reasoning pipeline ever reads (see MissionPlan).
@@ -50,7 +56,7 @@ public final class Aegis {
 
         MissionPlan plan = planner.plan(mission);
 
-        EngineFactory.CreatedEngine created = EngineFactory.create();
+        EngineFactory.CreatedEngine created = EngineFactory.create(browserConfig);
 
         MissionResult result = created.engine().execute(mission);
 

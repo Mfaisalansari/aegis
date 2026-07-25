@@ -1,6 +1,7 @@
 package com.aegis.core.browser.playwright;
 
 import com.aegis.core.browser.Browser;
+import com.aegis.core.browser.BrowserConfig;
 import com.aegis.model.observation.AnomalySignal;
 import com.aegis.model.observation.ElementInfo;
 import com.microsoft.playwright.BrowserType;
@@ -23,19 +24,36 @@ public class PlaywrightBrowser implements Browser {
     private static final Logger log = LoggerFactory.getLogger(PlaywrightBrowser.class);
 
     private final List<AnomalySignal> anomalies = new CopyOnWriteArrayList<>();
+    private final BrowserConfig config;
 
     private Playwright playwright;
     private com.microsoft.playwright.Browser browser;
     private Page page;
+
+    public PlaywrightBrowser() {
+        this(BrowserConfig.defaults());
+    }
+
+    public PlaywrightBrowser(BrowserConfig config) {
+        this.config = config;
+    }
 
     @Override
     public void launch() {
 
         playwright = Playwright.create();
 
-        browser = playwright.chromium().launch(
+        BrowserType engine = switch (config.type().toLowerCase()) {
+            case "firefox" -> playwright.firefox();
+            case "webkit" -> playwright.webkit();
+            case "chromium" -> playwright.chromium();
+            default -> throw new IllegalArgumentException(
+                    "Unknown browser type: " + config.type() + " (expected chromium, firefox, or webkit)");
+        };
+
+        browser = engine.launch(
                 new BrowserType.LaunchOptions()
-                        .setHeadless(false)
+                        .setHeadless(config.headless())
         );
 
         page = browser.newPage();
@@ -127,10 +145,20 @@ public class PlaywrightBrowser implements Browser {
 
         try {
 
+            // NETWORKIDLE, not DOMCONTENTLOADED: this is the one moment a
+            // full page's JS bundle loads from scratch, and
+            // DOMCONTENTLOADED alone can fire before a JS-heavy SPA has
+            // actually rendered anything — confirmed live against
+            // OrangeHRM's Vue app, which has zero real inputs/buttons at
+            // DOMCONTENTLOADED but the real login form once network
+            // activity settles. settle() (used after every other action)
+            // deliberately stays at the faster DOMCONTENTLOADED — later
+            // actions within an already-loaded SPA don't re-fetch its
+            // bundle, so there's no reason to pay this cost every time.
             page.navigate(
                     url,
                     new Page.NavigateOptions()
-                            .setWaitUntil(WaitUntilState.DOMCONTENTLOADED)
+                            .setWaitUntil(WaitUntilState.NETWORKIDLE)
                             .setTimeout(30000)
             );
 
@@ -308,7 +336,7 @@ public class PlaywrightBrowser implements Browser {
             String id = safe(input.getAttribute("id"));
             String name = safe(input.getAttribute("name"));
             String value = safe(input.getAttribute("value"));
-            String type = safe(input.getAttribute("type"));
+            String type = normalizeInputType(input.getAttribute("type"));
 
             String bestLocator = buildBestLocator("input", id, name, i);
 
@@ -450,5 +478,21 @@ public class PlaywrightBrowser implements Browser {
      */
     private String safe(String value) {
         return value == null ? "" : value;
+    }
+
+    /**
+     * An {@code <input>} with no {@code type} attribute at all is a real,
+     * valid, common HTML pattern (every browser treats it as
+     * {@code type="text"} per spec) — but the raw DOM attribute read
+     * comes back {@code null}/blank in that case, not "text". Left
+     * unnormalized, that blank string doesn't match any known type
+     * anywhere downstream (DefaultElementActionMapper's switch,
+     * DefaultInputValueResolver's field-shape heuristics, ...), so the
+     * field silently gets zero candidate actions generated for it —
+     * confirmed live against OrangeHRM's username field, which uses
+     * exactly this pattern.
+     */
+    private String normalizeInputType(String type) {
+        return (type == null || type.isBlank()) ? "text" : type;
     }
 }

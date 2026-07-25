@@ -1,0 +1,21 @@
+# Edit this file for your own application — no code changes needed for
+# common scenarios. See samples/README.md for the full walkthrough.
+
+application:
+  baseUrl: https://opensource-demo.orangehrmlive.com/web/index.php/auth/login
+  username: Admin
+  password: admin123
+  successUrlContains: dashboard
+
+browser:
+  type: chromium
+  headless: false
+
+mission:
+  # "adaptive" (rather than the "greedy" default) as a deliberate second
+  # example of picking a non-default strategy — see USAGE.md §5.
+  strategy: adaptive
+  maxIterations: 20
+
+report:
+  directory: reports

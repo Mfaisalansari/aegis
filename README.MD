@@ -919,6 +919,27 @@ Verified live against a real saucedemo.com run: all 3 Execution events got a mat
 
 ---
 
+## Sprint 38 — Framework Adoption, Stage 1 of 6 (Complete)
+
+A much larger, separate, user-authored 6-stage initiative: turn AEGIS from internal Java classes into an adoptable framework — public SDK, plugins, enterprise features, a CLI, docs, and eventually a community release. Stage 1's exit criteria: *"A QA engineer with no prior knowledge can run AEGIS in under 15 minutes."* Confirmed with the user before starting: "implement only application-specific pieces: Login" means declarative config (baseUrl/credentials/success-condition — same as existing mission parameters, just typed), not a new scripted-flow capability — AEGIS's autonomous exploration engine is completely untouched.
+
+- ✅ **New `aegis-api` module**: `MissionBuilder` (typed wrapper over every mission parameter), `ApplicationConfig`/`MissionConfig`/`AegisConfig` + `AegisConfigLoader` (YAML via SnakeYAML — already cached locally, parsed into a generic tree and hand-mapped, same style as `JsonReportGenerator`'s hand-built JSON rather than reflection binding), `AegisApplication` (the one interface a consumer implements — `name()` + `config()`, nothing scripted), `Launcher` (`MissionRunner`'s logic promoted up a layer — `aegis-launcher`'s own `MissionRunner` now delegates to it).
+- ✅ **New `BrowserConfig`** (`aegis-core`) — `type`/`headless`, additive, defaults match exactly what was hardcoded before. Real chromium/firefox/webkit switching in `PlaywrightBrowser`, not just a schema field.
+- ✅ **3 sample projects** (`samples/sample-saucedemo`, `-orangehrm`, `-nopcommerce`) — standalone modules depending **only on `aegis-api`**, proving the SDK boundary for real, with `exec-maven-plugin` preconfigured (`mvn -pl samples/X exec:java`, no flags).
+- ✅ Public API surface now spans `aegis-model` + `aegis-core` + `aegis-api` — still documentation/convention, not JPMS (no `module-info.java` anywhere; introducing one would be a high-risk detour for a usability goal, not a security one).
+- 27 new unit tests. Full suite: 246/246 passing.
+
+**Two real, narrow bugs found and fixed** building samples against sites this project had never touched before — same "fix it, it blocks this milestone's own deliverable" precedent as Phase 4 earlier this session:
+
+- `PlaywrightBrowser.navigate()` only waited for `DOMCONTENTLOADED`, unlike every other action's `settle()` — fine for simple pages, but confirmed live that OrangeHRM's Vue.js login form has 0 real inputs/buttons at that point, only appearing once `NETWORKIDLE`. Now the initial navigation waits for `NETWORKIDLE` specifically; per-action `settle()` stays at the faster `DOMCONTENTLOADED`.
+- An `<input>` with no `type` attribute (implicitly `text` per HTML spec) silently got zero candidate actions generated for it, ever — confirmed live that OrangeHRM's username field (unlike its password field) omits `type` entirely, and AEGIS never once selected it across 20 iterations. Fixed at the observation layer (`PlaywrightBrowser`, not frozen), benefiting every downstream consumer uniformly.
+
+Live-verified all 3 samples end-to-end, each run with nothing but `aegis-api` on the classpath: SauceDemo `SUCCESS` immediately; OrangeHRM `SUCCESS` after both fixes (using `strategy: adaptive`); nopCommerce — `demo.nopcommerce.com` itself turned out to be blocked by bot protection even against real Playwright traffic, so the sample points at `demowebshop.tricentis.com` instead (same underlying platform, already proven reachable all session) — `SUCCESS` with `strategy: form-first` after it initially wandered into the page's 60+ other links instead of finishing the registration form. Also smoke-tested `headless: true` and `type: firefox`, both reaching real `SUCCESS`. Confirmed all 6 of `aegis-launcher`'s existing dev/regression `*Main` classes still work unchanged.
+
+**This completes Stage 1 of 6.** Stages 2–6 (plugin architecture, enterprise readiness, ecosystem/CLI, performance & quality, community release) are real, tracked in `AEGIS_ROADMAP.md`, and not started.
+
+---
+
 # Long-Term Vision
 
 AEGIS is not intended to replace Selenium or Playwright.
@@ -984,10 +1005,10 @@ v1.0.0-SNAPSHOT
 
 Current State
 
-**Rule-Based Autonomous QA Agent, with five independent opt-in AI-assisted decision points** (`explorationStrategy: llm` candidate scoring, mission-plan preview, bug explanation, recommendation, natural-language mission parsing — see Phase 8), plus adaptive/coverage-aware exploration, self-healing execution with real live screenshot capture, and a stable public API (`Aegis.run(Mission)` in `aegis-core`). Every roadmap phase (0 through 10) is complete, plus one post-v1.0 addition (Sprint 37).
+**Rule-Based Autonomous QA Agent, with five independent opt-in AI-assisted decision points** (`explorationStrategy: llm` candidate scoring, mission-plan preview, bug explanation, recommendation, natural-language mission parsing — see Phase 8), plus adaptive/coverage-aware exploration, self-healing execution with real live screenshot capture, and a public SDK (`aegis-api`: `AegisApplication`, `MissionBuilder`, YAML config, `Launcher`) with 3 working sample projects. Every roadmap phase (0 through 10) is complete, plus real screenshot capture (Sprint 37) and Stage 1 of the 6-stage Framework Adoption initiative (Sprint 38).
 
 Honest framing, unchanged from every earlier sprint's own discipline: rule-based is still the *default* everywhere, not AI. Every LLM-backed feature is opt-in, falls back to a deterministic rule-based implementation on any failure, and candidate generation/input values/anomaly classification stay fully deterministic. "AEGIS v1.0" means the roadmap's original six deliverables are real and shipped — it doesn't mean AI-by-default; that would be a different, larger milestone this project hasn't taken on.
 
 Next Milestone
 
-Not yet chosen — every phase this roadmap named is done, and real screenshot capture (Sprint 37) is done too. Remaining real candidates for a v1.1+ direction (none started, none promised): an AI-backed decision-maker as the *default* rather than an opt-in strategy; cross-run experience persistence (today's `ExecutionMemory`/`WorldModel`/`ExperienceRepository` are explicitly in-run only, see `ARCHITECTURE.md`); a published/tagged release now that the version line has moved to `1.0.0-SNAPSHOT`.
+**Stage 2 of Framework Adoption: Plugin Architecture** — extension points (browser/observer/finding/LLM/auth/report plugins) so external teams can add capabilities without modifying `aegis-core`. Not started. Stages 3–6 (enterprise readiness, ecosystem/CLI, performance & quality, community release) queue up after that — see `AEGIS_ROADMAP.md`. Separately, the older v1.1+ candidates from before this initiative are still real but not scheduled: an AI-backed decision-maker as the *default* rather than opt-in; cross-run experience persistence; a published/tagged release now that the version line has moved to `1.0.0-SNAPSHOT`.

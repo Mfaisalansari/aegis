@@ -4,10 +4,84 @@ How to build, configure, run, and extend AEGIS. For architecture and design rati
 
 ---
 
+## 0. SDK Quick Start (recommended starting point)
+
+The fastest way to run AEGIS against your own application, with no `aegis-core` internals knowledge needed. This is what `samples/` demonstrates end-to-end — see `samples/README.md` for a concrete under-15-minutes walkthrough with 3 working examples (SauceDemo, OrangeHRM, nopCommerce/DemoWebShop).
+
+**1. Depend on `aegis-api` only:**
+
+```xml
+<dependency>
+    <groupId>com.aegis</groupId>
+    <artifactId>aegis-api</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+</dependency>
+```
+
+**2. Write an `application.yml`** (every field optional — see the table below for what each falls back to):
+
+```yaml
+application:
+  baseUrl: https://example.com
+  username: demo_user
+  password: demo_pass
+  successUrlContains: dashboard
+
+browser:
+  type: chromium   # chromium | firefox | webkit
+  headless: false
+
+mission:
+  strategy: adaptive   # see §5 for every option; omit for "greedy"
+  maxIterations: 20
+
+report:
+  directory: reports   # where the 3 report files get written
+```
+
+**3. Implement `AegisApplication`** (the "application-specific pieces" — declarative facts about your app, not scripted steps; AEGIS still discovers and drives the actual UI itself through normal autonomous exploration):
+
+```java
+public class MyApplication implements AegisApplication {
+    public String name() { return "My App"; }
+    public AegisConfig config() { return AegisConfigLoader.load(Path.of("application.yml")); }
+}
+```
+
+**4. Run it:**
+
+```java
+public static void main(String[] args) {
+    Launcher.run(new MyApplication());
+}
+```
+
+That's the whole surface: `Aegis`/`AegisReport` (also usable directly, see §3 below, if you'd rather build a `Mission` by hand or via `MissionBuilder` and skip the config file), `MissionBuilder`, `AegisConfig`/`ApplicationConfig`/`MissionConfig`/`AegisConfigLoader`, `AegisApplication`, `Launcher` — all in `com.aegis.api`, plus `Mission`/`MissionResult` (from `aegis-model`) and `BrowserConfig` (from `aegis-core`). This is the versioned public contract as of v1.0/Stage 1 — see `AEGIS_ROADMAP.md`'s Phase 10 and "Framework Adoption" sections for exactly what that promise covers.
+
+**`application.yml` field reference:**
+
+| Key | Falls back to when omitted |
+|---|---|
+| `application.baseUrl` | — (needed for a real mission, but the config loader itself doesn't require it) |
+| `application.username` / `.password` | unset — generic placeholder values get filled instead (see §4) |
+| `application.successUrlContains` | unset — mission runs out its `maxIterations` every time without ever declaring SUCCESS |
+| `browser.type` | `chromium` |
+| `browser.headless` | `false` |
+| `mission.name` / `.description` | `"AEGIS Mission"` / `"Autonomous exploration"` |
+| `mission.strategy` | `greedy` (see §5) |
+| `mission.maxIterations` | `10` |
+| `mission.inputStrategy` | `realistic` (see §4) |
+| `mission.interruptions` / `.doubleClicks` / `.raceConditions` | `false` |
+| `report.directory` | `reports` — resolved relative to the JVM's working directory, same as `mvn exec:java`'s default (the sample's own module directory) |
+
+Everything below (§1 onward) documents the same capabilities from the `aegis-core`/`aegis-launcher` side — useful for understanding how it works internally, or if you're contributing to AEGIS itself rather than just embedding it.
+
+---
+
 ## 1. Prerequisites
 
-- **Java 23** — all three modules (`aegis-model`, `aegis-core`, `aegis-launcher`) target Java 23 (`maven.compiler.source`/`target` in the root `pom.xml`).
-- **Maven** — a standard multi-module reactor build (root `pom.xml` lists modules in order: `aegis-model`, `aegis-core`, `aegis-launcher`).
+- **Java 23** — all modules (`aegis-model`, `aegis-core`, `aegis-api`, `aegis-launcher`, `samples/*`) target Java 23 (`maven.compiler.source`/`target` in the root `pom.xml`).
+- **Maven** — a standard multi-module reactor build (root `pom.xml` lists modules in order: `aegis-model`, `aegis-core`, `aegis-api`, `aegis-launcher`, `samples`).
 - **Playwright browsers** — `aegis-core` depends on `com.microsoft.playwright:playwright:1.54.0`. The first run downloads Chromium automatically; if it doesn't, install manually:
   ```
   mvn -pl aegis-core exec:java -Dexec.mainClass=com.microsoft.playwright.CLI -Dexec.args="install"
@@ -36,7 +110,9 @@ mvn clean install -DskipTests
 
 ## 3. Running a mission
 
-AEGIS has no CLI entry point yet (that's tracked as an open item — see `AEGIS_ROADMAP.md`). Each "mission" is a `Main` class in `aegis-launcher/src/main/java/com/aegis/launcher/`, and the project has no `exec-maven-plugin` or shade plugin configured, so the straightforward way to run one is **from an IDE** (IntelliJ, VS Code with the Java extension, etc.) with the module's dependencies on the classpath — right-click the `Main` class → Run.
+This section covers `aegis-launcher`'s internal dev/regression `Main` classes specifically. If you just want to run AEGIS against a real app, see §0 and `samples/README.md` instead — each sample module already has `exec-maven-plugin` preconfigured (`mvn -pl samples/sample-saucedemo exec:java`, no flags needed).
+
+`aegis-launcher` itself still has no CLI entry point or `exec-maven-plugin` configured. Each "mission" is a `Main` class in `aegis-launcher/src/main/java/com/aegis/launcher/`, so the straightforward way to run one is **from an IDE** (IntelliJ, VS Code with the Java extension, etc.) with the module's dependencies on the classpath — right-click the `Main` class → Run.
 
 If you want a command-line path, add this to `aegis-launcher/pom.xml` and then run `mvn -pl aegis-launcher exec:java -Dexec.mainClass=com.aegis.launcher.SauceDemoMain`:
 

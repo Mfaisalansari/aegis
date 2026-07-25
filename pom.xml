@@ -13,7 +13,9 @@
     <modules>
         <module>aegis-model</module>
         <module>aegis-core</module>
+        <module>aegis-api</module>
         <module>aegis-launcher</module>
+        <module>samples</module>
     </modules>
 
     <properties>
@@ -24,6 +26,7 @@
         <jackson.version>2.20.0</jackson.version>
         <slf4j.version>2.0.17</slf4j.version>
         <logback.version>1.5.18</logback.version>
+        <snakeyaml.version>2.2</snakeyaml.version>
     </properties>
 
     <dependencyManagement>
@@ -53,6 +56,12 @@
                 <groupId>com.fasterxml.jackson.core</groupId>
                 <artifactId>jackson-databind</artifactId>
                 <version>${jackson.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.yaml</groupId>
+                <artifactId>snakeyaml</artifactId>
+                <version>${snakeyaml.version}</version>
             </dependency>
 
         </dependencies>

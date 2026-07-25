@@ -1,0 +1,31 @@
+# Edit this file for your own application — no code changes needed for
+# common scenarios. See samples/README.md for the full walkthrough.
+#
+# Points at demowebshop.tricentis.com rather than demo.nopcommerce.com:
+# both run the same underlying nopCommerce platform (Tricentis hosts a
+# nopCommerce-based shop specifically for test-automation training), but
+# demo.nopcommerce.com's own bot protection blocked every request from
+# this environment's network — even real Playwright traffic, not just a
+# bare HTTP client — while this instance is reachable and well-behaved.
+#
+# No username set on purpose: this mission is a registration flow, not a
+# login, so AEGIS generates a fresh realistic email itself rather than
+# reusing a fixed one across runs.
+
+application:
+  baseUrl: https://demowebshop.tricentis.com/register
+  password: Aegis!2345
+  successUrlContains: registerresult
+
+browser:
+  type: chromium
+  headless: false
+
+mission:
+  # "form-first" biases toward filling in the registration form over the
+  # page's many other links, rather than "greedy" wandering off into them.
+  strategy: form-first
+  maxIterations: 25
+
+report:
+  directory: reports

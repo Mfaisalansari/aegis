@@ -15,6 +15,7 @@ import com.aegis.core.action.handler.WaitActionHandler;
 import com.aegis.core.anomaly.AnomalyDetector;
 import com.aegis.core.anomaly.BrowserSignalAnomalyDetector;
 import com.aegis.core.browser.Browser;
+import com.aegis.core.browser.BrowserConfig;
 import com.aegis.core.browser.playwright.PlaywrightBrowser;
 import com.aegis.core.llm.OpenAiCompatibleChatClient;
 import com.aegis.core.resilience.ScreenshotSample;
@@ -105,6 +106,10 @@ public final class EngineFactory {
     }
 
     public static CreatedEngine create() {
+        return create(BrowserConfig.defaults());
+    }
+
+    public static CreatedEngine create(BrowserConfig browserConfig) {
 
         /*
          * Browser
@@ -116,7 +121,7 @@ public final class EngineFactory {
          * Browser's contract (complete, or throw) is unchanged, only how
          * often it throws.
          */
-        SelfHealingBrowser selfHealingBrowser = new SelfHealingBrowser(new PlaywrightBrowser());
+        SelfHealingBrowser selfHealingBrowser = new SelfHealingBrowser(new PlaywrightBrowser(browserConfig));
         Browser browser = selfHealingBrowser;
         browser.launch();
 

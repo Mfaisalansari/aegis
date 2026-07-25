@@ -1,0 +1,18 @@
+# Edit this file for your own application — no code changes needed for
+# common scenarios. See samples/README.md for the full walkthrough.
+
+application:
+  baseUrl: https://www.saucedemo.com/
+  username: standard_user
+  password: secret_sauce
+  successUrlContains: inventory.html
+
+browser:
+  type: chromium
+  headless: false
+
+mission:
+  strategy: greedy
+
+report:
+  directory: reports

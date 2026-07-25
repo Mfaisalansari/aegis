@@ -393,6 +393,54 @@ Live-verified against a real saucedemo.com run: all 3 EXECUTION events in that r
 
 ---
 
+# 🟢 Framework Adoption — Stage 1 of 6 (Complete)
+
+## Status
+
+Stage 1 completed (2026-07-25). This is a separate, much larger user-authored initiative beyond the original roadmap (Phases 0–10) and the post-v1.0 items — 6 stages total, tracked here as each is picked up:
+
+1. **Framework Adoption** (this section) — public SDK, config file, sample projects. Complete.
+2. **Plugin Architecture** — extension points (browser/observer/finding/LLM/auth/report plugins). Not started.
+3. **Enterprise Readiness** — mission/environment profiles, secret management, parallel execution, scheduling, CLI. Not started.
+4. **Ecosystem** — full docs (user/architecture/plugin-dev guides, API reference, FAQ), a real `aegis` CLI (`init`/`run`/`report`/`validate`/`doctor`), IDE templates. Not started.
+5. **Performance & Quality** — benchmarking, memory/thread-safety review, API stability, dependency cleanup, test coverage. No new functionality. Not started.
+6. **Community Release** — README/CONTRIBUTING/CHANGELOG/license/versioning policy, GitHub Actions, issue templates. Not started.
+
+## Stage 1 exit criteria
+
+*"A QA engineer with no prior knowledge can run AEGIS in under 15 minutes."* Verified live — see below.
+
+## Design
+
+Five of six original deliverables already existed by the time this was picked up (autonomous exploration, adaptive learning, coverage intelligence, AI reasoning, production reporting — Phases 1–8); the actual gap was that **there was no public entry point to embed AEGIS at all** — `MissionRunner`, the class that ran a mission end-to-end, was package-private inside `aegis-launcher`. Confirmed with the user before starting: "implement only application-specific pieces: Login" means **declarative config** (baseUrl/credentials/success-condition, same as existing mission parameters, just a typed surface) — not a new imperative scripted-flow capability. AEGIS's autonomous exploration engine is completely untouched by this stage.
+
+- **New `aegis-api` module** (`com.aegis.api`), depending on `aegis-model`+`aegis-core`: `MissionBuilder` (fluent wrapper over every existing mission parameter — zero new capability), `ApplicationConfig`/`MissionConfig`/`AegisConfig` (YAML-shaped config records) + `AegisConfigLoader` (SnakeYAML, parsed into a generic tree and hand-mapped — same "no reflection-binding magic" style already used for JSON in `JsonReportGenerator`, rather than SnakeYAML's POJO binding), `AegisApplication` (the interface a consumer implements — `name()` + `config()`, nothing scripted), `Launcher` (`MissionRunner`'s logic promoted up a layer and generalized — writes reports, prints console output; `Aegis` itself stays disk-free).
+- **New `com.aegis.core.browser.BrowserConfig`** (`type`, `headless`) — additive, `defaults()` matches exactly what was hardcoded before (chromium, headed). `PlaywrightBrowser` gained a constructor taking it (real chromium/firefox/webkit switching, not just a schema field); `EngineFactory`/`Aegis` gained matching overloads. The only `aegis-core` touch — doesn't affect the Stable Components list.
+- **3 sample projects** under a new `samples/` aggregator (`sample-saucedemo`, `sample-orangehrm`, `sample-nopcommerce`), each a standalone module depending **only on `aegis-api`** (proves the SDK boundary for real — same proof style as the v1.0 capstone verification), with `exec-maven-plugin` preconfigured so `mvn -pl samples/X exec:java` just works.
+- Public API surface as of Stage 1: `Mission`/`MissionResult` (`aegis-model`), `Aegis`/`AegisReport`/`BrowserConfig` (`aegis-core`), `MissionBuilder`/`AegisApplication`/`AegisConfig`/`ApplicationConfig`/`MissionConfig`/`AegisConfigLoader`/`Launcher` (`aegis-api`), and the 3 report generators' `generate(...)` methods. Still documentation + package convention, not JPMS — no `module-info.java` exists anywhere in the project, and introducing one would be a high-risk, high-effort detour for a usability-driven exit criterion, not a security one.
+- 27 new unit tests (`BrowserConfigTest`, `MissionBuilderTest`, `AegisConfigLoaderTest`). Full suite: 246/246 passing.
+
+## Two real bugs found and fixed along the way
+
+Building samples against sites this project had never touched surfaced genuine, narrow, well-understood gaps — fixed under the same precedent set earlier this session (Phase 4: a frozen-component bug blocking a milestone's own deliverable is in scope to fix, an unrelated architecture change is not):
+
+- **`PlaywrightBrowser.navigate()` only waited for `DOMCONTENTLOADED`**, unlike every other action method's `settle()`. Fine for simple pages, but OrangeHRM's Vue.js login form doesn't exist in the DOM yet at that point (confirmed live: 0 inputs/buttons right after `DOMCONTENTLOADED`, 3 inputs/1 button once network activity settles) — the very first Observation of a mission could catch an effectively empty page. Now waits for `NETWORKIDLE` specifically for the initial navigation (the one moment a full page's JS bundle loads from scratch); per-action `settle()` deliberately stays at the faster `DOMCONTENTLOADED` since later actions don't re-fetch the bundle.
+- **An `<input>` with no `type` attribute silently got zero candidate actions generated for it, ever.** Real HTML/every browser treats a type-less input as `type="text"`, but `PlaywrightBrowser.getInputs()` read the raw (absent) attribute as an empty string, which matched no case in `DefaultElementActionMapper`'s switch — confirmed live: OrangeHRM's username field has no `type` attribute (its password field does), and AEGIS never once selected it as a candidate across 20 iterations regardless of strategy. Fixed at the observation layer (`PlaywrightBrowser`, not frozen) by normalizing a blank/absent type to `"text"` — benefits every downstream consumer (mapper, confidence scoring, input resolver) uniformly rather than patching each independently.
+
+## Verification
+
+Live-verified all 3 samples end-to-end, each run from its own module directory with **nothing but `aegis-api` and its transitive dependencies on the classpath** — no `aegis-core` internals imported, no `aegis-launcher` involved:
+
+- `sample-saucedemo` — `SUCCESS` on the first try (no site-specific issues).
+- `sample-orangehrm` — initially `FAILED` (0 candidate actions from the Vue-rendering timing gap, then a real reasoning stall from the type-less-input gap); `SUCCESS` after both fixes landed, using `strategy: adaptive`.
+- `sample-nopcommerce` — `demo.nopcommerce.com` itself is blocked by bot protection from this environment's network (confirmed with real Playwright traffic, not just a bare HTTP client, still blocked) — swapped to `demowebshop.tricentis.com` (same underlying nopCommerce platform, already proven reachable all session). Initial run `FAILED` (wandered into the page's 60+ other links instead of finishing the registration form); `SUCCESS` with `strategy: form-first`.
+- Also smoke-tested `browser.headless: true` and `browser.type: firefox` against `sample-saucedemo` (both browser binaries already present locally) — both reached real `SUCCESS`, confirming `BrowserConfig` genuinely reaches Playwright, not just that the YAML parses.
+- Confirmed `aegis-launcher`'s existing 6 `*Main` classes (the dev/regression harness used all session) still work unchanged — `MissionRunner` now delegates to `Launcher`, verified with a fresh `SauceDemoMain` run.
+
+**This completes Stage 1 of 6.** Stages 2–6 are real, tracked, and not started.
+
+---
+
 # Current Sprint
 
 ## Sprint Goal
