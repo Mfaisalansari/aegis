@@ -23,14 +23,21 @@
             <artifactId>aegis-api</artifactId>
             <version>${project.version}</version>
         </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <!--
-         Produces a single runnable jar (java -jar aegis-cli.jar run
-         --config ...) bundling every runtime dependency (Playwright,
-         Jackson, SnakeYAML, SLF4J, Logback) — this is the one module in
-         the project that needs that, everything else so far has been
-         run via `mvn exec:java` against the reactor's own classpath.
+         Produces a single runnable jar (java -jar aegis-cli.jar run,
+         see USAGE.md for the full flag reference) bundling every
+         runtime dependency (Playwright, Jackson, SnakeYAML, SLF4J,
+         Logback) — this is the one module in the project that needs
+         that, everything else so far has been run via `mvn exec:java`
+         against the reactor's own classpath.
     -->
     <build>
         <plugins>

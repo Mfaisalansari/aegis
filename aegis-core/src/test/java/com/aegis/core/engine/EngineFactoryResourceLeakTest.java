@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import java.util.Map;
 import java.util.UUID;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -52,5 +53,25 @@ class EngineFactoryResourceLeakTest {
         assertNotNull(created.engine());
         assertNotNull(TestLeakProbeBrowserFactory.last());
         assertFalse(TestLeakProbeBrowserFactory.last().wasClosed());
+    }
+
+    // Code-review follow-up: if the SessionProvider throws AND the
+    // cleanup close() call also throws, the original SessionProvider
+    // failure must still be the exception the caller sees — the close
+    // failure is attached as suppressed, not substituted in its place.
+    @Test
+    void aSessionProviderFailureSurvivesACloseFailureToo() {
+
+        Mission mission = new Mission(
+                UUID.randomUUID(), "Leak Probe", "desc",
+                Map.of("test.throwOnSessionProvider", "true"));
+
+        BrowserConfig config = new BrowserConfig("test-close-throws", true);
+
+        RuntimeException thrown = assertThrows(RuntimeException.class, () -> EngineFactory.create(mission, config));
+
+        assertEquals("simulated SessionProvider failure", thrown.getMessage());
+        assertEquals(1, thrown.getSuppressed().length);
+        assertEquals("simulated close failure", thrown.getSuppressed()[0].getMessage());
     }
 }

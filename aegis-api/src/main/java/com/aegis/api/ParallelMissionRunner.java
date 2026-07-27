@@ -8,6 +8,7 @@ import com.aegis.model.mission.Mission;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -19,22 +20,24 @@ import java.util.concurrent.Executors;
  * shared mutable state anywhere in {@code aegis-core}), so this needed
  * zero changes there.
  *
- * If any mission throws, {@code runAll} propagates that failure after
- * all missions have finished (not fail-fast/cancel-the-others) — a
- * broken site shouldn't stop the rest of a batch from reporting back,
- * which is the point of running a batch in the first place.
+ * A mission throwing doesn't fail the whole batch — every future is
+ * waited on regardless of whether an earlier one failed, and the
+ * returned {@link BatchResult} carries every successful report AND
+ * every failure, both keyed the same way as the input map. A broken
+ * site shouldn't cost the caller the other 9 real reports out of a
+ * batch of 10.
  */
 public final class ParallelMissionRunner {
 
     private ParallelMissionRunner() {
     }
 
-    public static Map<String, AegisReport> runAll(Map<String, Mission> missions, int maxConcurrency) {
+    public static BatchResult runAll(Map<String, Mission> missions, int maxConcurrency) {
         return runAll(missions, BrowserConfig.defaults(), maxConcurrency);
     }
 
     /** Same as {@link #runAll(Map, int)}, with one {@link BrowserConfig} shared by every mission in the batch. */
-    public static Map<String, AegisReport> runAll(
+    public static BatchResult runAll(
             Map<String, Mission> missions, BrowserConfig browserConfig, int maxConcurrency) {
 
         ExecutorService executor = Executors.newFixedThreadPool(Math.max(1, maxConcurrency));
@@ -48,21 +51,32 @@ public final class ParallelMissionRunner {
                 futures.put(entry.getKey(), CompletableFuture.supplyAsync(() -> Aegis.run(mission, browserConfig), executor));
             }
 
-            // Stage 5 hardening: wait for every future to complete — success
-            // or failure — before reading any of them. Joining one at a time
-            // below would otherwise throw on the first failing future in
-            // map-iteration order while later missions are still running
-            // unawaited in the background, contradicting this class's own
-            // documented "propagates after all missions have finished".
-            CompletableFuture.allOf(futures.values().toArray(new CompletableFuture[0])).join();
-
-            Map<String, AegisReport> results = new LinkedHashMap<>();
-
-            for (Map.Entry<String, CompletableFuture<AegisReport>> entry : futures.entrySet()) {
-                results.put(entry.getKey(), entry.getValue().join());
+            // Wait for every future to complete — success or failure —
+            // before reading any of them, so a slower mission always gets
+            // to finish even if an earlier-ordered one fails fast. allOf()
+            // itself throws once any constituent future fails, but that's
+            // only used here for its "block until everyone is done" side
+            // effect — the real per-mission outcome is read below, so a
+            // failure here is deliberately swallowed rather than
+            // propagated.
+            try {
+                CompletableFuture.allOf(futures.values().toArray(new CompletableFuture[0])).join();
+            } catch (CompletionException ignored) {
+                // handled per-mission below
             }
 
-            return results;
+            Map<String, AegisReport> reports = new LinkedHashMap<>();
+            Map<String, Throwable> failures = new LinkedHashMap<>();
+
+            for (Map.Entry<String, CompletableFuture<AegisReport>> entry : futures.entrySet()) {
+                try {
+                    reports.put(entry.getKey(), entry.getValue().join());
+                } catch (CompletionException e) {
+                    failures.put(entry.getKey(), e.getCause() != null ? e.getCause() : e);
+                }
+            }
+
+            return new BatchResult(reports, failures);
 
         } finally {
             executor.shutdown();

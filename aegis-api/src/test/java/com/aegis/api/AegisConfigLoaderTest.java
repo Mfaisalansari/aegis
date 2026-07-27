@@ -184,8 +184,17 @@ class AegisConfigLoaderTest {
     }
 
     @Test
-    void loadFromAMissingPathThrowsAegisConfigException() {
-        assertThrows(AegisConfigException.class, () -> AegisConfigLoader.load(Path.of("does-not-exist.yml")));
+    void loadFromAMissingPathThrowsAegisConfigExceptionWithActionableGuidance() {
+
+        AegisConfigException exception = assertThrows(AegisConfigException.class,
+                () -> AegisConfigLoader.load(Path.of("does-not-exist.yml")));
+
+        // Not just "file not found" — resolving where it looked and how to
+        // fix a working-directory mismatch (e.g. an IDE run configuration
+        // that doesn't default to the module's own directory) is the whole
+        // point of this message; a bare NoSuchFileException gives neither.
+        assertTrue(exception.getMessage().contains("does-not-exist.yml"));
+        assertTrue(exception.getMessage().contains("working directory"));
     }
 
     private InputStream inputStream(String yaml) {

@@ -26,8 +26,14 @@ jobs:
       # CONTRIBUTING.md), but installing them keeps this workflow closer
       # to a real build and lets any future browser-touching test run
       # for real instead of silently reporting "not available".
+      #
+      # -am ("also make") builds aegis-core's reactor-sibling dependency
+      # (aegis-model) as part of this same command — without it, this is
+      # the first mvn invocation on a fresh runner with an empty local
+      # repo, so `-pl aegis-core` alone can't resolve aegis-model and
+      # this step fails before the build ever gets to run.
       - name: Install Playwright browsers
-        run: mvn -B -pl aegis-core exec:java -Dexec.mainClass=com.microsoft.playwright.CLI -Dexec.args="install --with-deps chromium"
+        run: mvn -B -pl aegis-core -am exec:java -Dexec.mainClass=com.microsoft.playwright.CLI -Dexec.args="install --with-deps chromium"
 
       - name: Build and test
         run: mvn -B clean verify

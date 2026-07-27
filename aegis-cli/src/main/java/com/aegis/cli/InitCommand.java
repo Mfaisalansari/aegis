@@ -113,7 +113,7 @@ final class InitCommand {
                 .replace("{{APP_NAME}}", appName)
                 .replace("{{ARTIFACT_ID}}", artifactId)
                 .replace("{{PACKAGE}}", packageName)
-                .replace("{{BASE_URL}}", baseUrl)
+                .replace("{{BASE_URL}}", escapeForYamlDoubleQuoted(baseUrl))
                 .replace("{{AEGIS_VERSION}}", AEGIS_VERSION);
 
         Files.writeString(destination, content, StandardCharsets.UTF_8);
@@ -129,6 +129,24 @@ final class InitCommand {
 
             return new String(in.readAllBytes(), StandardCharsets.UTF_8);
         }
+    }
+
+    /**
+     * Code-review follow-up: {@code {{BASE_URL}}} lands inside a
+     * double-quoted YAML scalar in application.yml.template
+     * ({@code baseUrl: "{{BASE_URL}}"}) — a raw, unescaped value
+     * containing a backslash, a double quote, or a newline would produce
+     * structurally broken YAML in the generated project. Only the two
+     * characters YAML's double-quoted scalar syntax actually requires
+     * escaped need handling here; embedded newlines are collapsed to a
+     * space since a URL spanning multiple lines isn't meaningful anyway.
+     */
+    private static String escapeForYamlDoubleQuoted(String value) {
+        return value
+                .replace("\\", "\\\\")
+                .replace("\"", "\\\"")
+                .replace("\n", " ")
+                .replace("\r", " ");
     }
 
     private static String toClassName(String rawName) {

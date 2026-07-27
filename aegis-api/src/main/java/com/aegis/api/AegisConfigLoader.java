@@ -7,6 +7,7 @@ import org.yaml.snakeyaml.Yaml;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -33,6 +34,14 @@ public final class AegisConfigLoader {
 
         try (InputStream in = Files.newInputStream(path)) {
             return load(in);
+        } catch (NoSuchFileException e) {
+            throw new AegisConfigException(
+                    "Config file not found: " + path + " (resolved to " + path.toAbsolutePath() + "). "
+                            + "Relative paths are resolved against the JVM's working directory, not the "
+                            + "module's directory. Running via `mvn exec:java` from the module sets this "
+                            + "correctly automatically; if you're running from an IDE's own run "
+                            + "configuration, set its working directory to the module that contains this "
+                            + "file.", e);
         } catch (IOException e) {
             throw new AegisConfigException("Failed to read config file: " + path, e);
         }

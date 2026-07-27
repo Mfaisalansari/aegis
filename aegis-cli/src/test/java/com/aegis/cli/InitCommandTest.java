@@ -1,11 +1,13 @@
 package com.aegis.cli;
 
 import org.junit.jupiter.api.Test;
+import org.yaml.snakeyaml.Yaml;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -28,7 +30,8 @@ class InitCommandTest {
             assertTrue(pom.contains("aegis-api"));
 
             String yaml = Files.readString(directory.resolve("application.yml"));
-            assertTrue(yaml.contains("baseUrl: https://example.org/"));
+            assertTrue(yaml.contains("baseUrl: \"https://example.org/\""));
+            assertEquals("https://example.org/", parseBaseUrl(yaml));
 
             Path sourceDir = directory.resolve("src/main/java/com/aegis/generated/myapp");
             assertTrue(Files.exists(sourceDir.resolve("Main.java")));
@@ -81,6 +84,36 @@ class InitCommandTest {
     @Test
     void missingDirectoryArgumentFails() {
         assertEquals(1, InitCommand.run(new String[0]));
+    }
+
+    // Code-review follow-up: a --base-url value containing YAML-special
+    // characters (a colon+space, a double quote, a backslash) must not
+    // corrupt the generated application.yml — see InitCommand's
+    // escapeForYamlDoubleQuoted.
+    @Test
+    void baseUrlWithYamlSpecialCharactersProducesValidYaml() throws IOException {
+
+        Path directory = Files.createTempDirectory("aegis-init-test").resolve("special-chars-app");
+        String tricky = "https://example.com/path?note=a: \"quoted\" \\value";
+
+        try {
+            int exitCode = InitCommand.run(new String[] {directory.toString(), "--base-url", tricky});
+
+            assertEquals(0, exitCode);
+
+            String yaml = Files.readString(directory.resolve("application.yml"));
+            assertEquals(tricky, parseBaseUrl(yaml));
+
+        } finally {
+            deleteRecursively(directory);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private String parseBaseUrl(String yaml) {
+        Map<String, Object> root = new Yaml().load(yaml);
+        Map<String, Object> application = (Map<String, Object>) root.get("application");
+        return (String) application.get("baseUrl");
     }
 
     private void deleteRecursively(Path path) throws IOException {

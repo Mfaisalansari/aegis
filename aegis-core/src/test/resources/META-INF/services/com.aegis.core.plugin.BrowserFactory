@@ -1,1 +1,2 @@
 com.aegis.core.engine.TestLeakProbeBrowserFactory
+com.aegis.core.engine.TestCloseThrowingBrowserFactory
