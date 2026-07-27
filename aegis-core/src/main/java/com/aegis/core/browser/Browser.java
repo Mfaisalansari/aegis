@@ -1,5 +1,6 @@
 package com.aegis.core.browser;
 
+import com.aegis.core.knowledge.ElementSnapshot;
 import com.aegis.core.plugin.AuthenticatedSession;
 import com.aegis.model.observation.AnomalySignal;
 import com.aegis.model.observation.ElementInfo;
@@ -130,5 +131,34 @@ public interface Browser {
      * activity — never mid-mission.
      */
     default void applySession(AuthenticatedSession session) {
+    }
+
+    /**
+     * Wires a {@link SignalRecorder} up to this
+     * browser's own console/network listeners (Page Inspection Layer) —
+     * passive, observe-only, never changes what the browser does. Default
+     * is a no-op so existing/test implementations don't need to do
+     * anything; only {@code PlaywrightBrowser} needs a real one. Called at
+     * most once, after {@link #launch()} (and after {@link #applySession},
+     * if a session was applied), only when inspection capture is enabled —
+     * {@code recorder} is never null when called.
+     */
+    default void attachSignalRecorder(SignalRecorder recorder) {
+    }
+
+    /**
+     * Bounding box, computed style, and accessible-name data for one
+     * already-known element locator (Page Inspection Layer's UI checks) —
+     * data {@link ElementInfo} was never designed to carry. Returns {@code
+     * null} when unsupported, or when the element couldn't be resolved
+     * (e.g. it became detached between observation and capture) — the
+     * caller ({@code SignalCapturingObserver}) simply skips a null
+     * result, same as a missing element is just absent from the snapshot.
+     * Default returns {@code null} so existing/test implementations don't
+     * need to do anything; only {@code PlaywrightBrowser} needs a real
+     * one.
+     */
+    default ElementSnapshot captureElementSnapshot(String locator) {
+        return null;
     }
 }

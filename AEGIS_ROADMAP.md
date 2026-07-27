@@ -613,6 +613,188 @@ License chosen with the user: **Apache 2.0** (matches Playwright/Jackson/SnakeYA
 
 ---
 
+# 🟢 Post-Framework-Adoption — Code Review Follow-ups
+
+## Status
+
+Completed (2026-07-25).
+
+## Note
+
+Not a new stage — after Stages 4–6 landed (`67de73d`/`bab6d2b`/`a26e16e`), a manual code review of that same diff (since `ci.yml` and the Stage 5 fixes had never actually been exercised — no `mvn` binary and no real CI runner in this sandbox) found 4 real issues. Fixed here rather than left as follow-up debt.
+
+## What shipped
+
+- **CI actually resolves its own dependencies now.** `.github/workflows/ci.yml`'s Playwright-install step ran `mvn -pl aegis-core exec:java` without `-am` — on a fresh runner with an empty local repo, that can't resolve `aegis-core`'s dependency on the unbuilt `aegis-model` sibling module, so the workflow would have failed on its very first run. Fixed by adding `-am`.
+- **The Stage 5 leak fix no longer masks its own root cause.** `EngineFactory.create()`'s SessionProvider try/catch called `browser.close()` then rethrew — if `close()` itself threw, that replaced the original exception entirely, hiding what the plugin actually did wrong. Fixed with `addSuppressed`, so both are visible.
+- **`ParallelMissionRunner` now actually delivers on its own documented intent.** The Stage 5 fix made `runAll` wait for every mission to finish before failing, but it was still all-or-nothing: any single mission's exception discarded every successful report along with it, contradicting the class's own javadoc ("a broken site shouldn't stop the rest of a batch from reporting back"). New `BatchResult` record (`reports`, `failures`, `hasFailures()`) replaces the old `Map<String, AegisReport>` return type — a **breaking change**, acceptable pre-`1.0.0` per `CONTRIBUTING.md`'s versioning policy. A caller now gets every successful report *and* every failure, never nothing.
+- **`aegis init --base-url` no longer produces broken YAML.** The raw CLI argument was substituted directly into the generated `application.yml` with no escaping — a value containing a colon+space or a quote could corrupt the generated file. Fixed with a YAML double-quoted-scalar escape helper in `InitCommand`.
+
+## Verification
+
+- 7 new/updated unit tests: `EngineFactoryResourceLeakTest` gained a real `BrowserFactory`/`SessionProvider` pair (`TestCloseThrowingBrowser`/`TestCloseThrowingBrowserFactory`, discovered via `META-INF/services`) proving the original exception survives a close() failure with the close failure attached as suppressed; new `BatchResultTest` (defensive copying, null-normalization, `hasFailures()`); `InitCommandTest` gained a real SnakeYAML-parsed round-trip test for a `--base-url` containing a colon, quote, and backslash. Full suite re-run to confirm zero regressions elsewhere.
+- YAML syntax of the corrected `ci.yml` re-validated.
+- Live-verified `EngineFactory`'s addSuppressed fix and `ParallelMissionRunner`'s new partial-results behavior against real Playwright/real sites, same discipline as every other fix this session — see the verification log for exact commands and observed output.
+- Docs updated: `USAGE.md` §8c's parallel-execution example, `API_REFERENCE.md`'s `ParallelMissionRunner`/new `BatchResult` entries, `CHANGELOG.md`.
+- Honest limitation, unchanged from Stage 6: the CI workflow's YAML is reviewed and syntax-validated, but still can't be executed end-to-end in this sandbox — there's no `mvn` binary and no real GitHub Actions runner here.
+
+---
+
+# 🟢 Knowledge Enrichment Layer v1 — State/Node/Flow/Journey Catalogs
+
+## Status
+
+Completed (2026-07-25).
+
+## Note
+
+A new, permanent architectural layer, initiated by the user — not part of the original roadmap or the Framework Adoption initiative. Sits between `WorldModel`'s raw facts and every future consumer (reports, a test planner, an impact analyzer, a recommendation engine, an AI assistant):
+
+```
+Explorer → WorldModel (Facts) → Knowledge Enrichment Layer → Consumers
+                                    ├── State Catalog (facts, this slice)
+                                    ├── Node Catalog (facts + naming, this slice)
+                                    ├── Flow Catalog (this slice)
+                                    ├── Journey Catalog (this slice)
+                                    └── Risk/Business Metadata, Requirements, Defects, Historical Learning (future)
+```
+
+**Governing principle, stated explicitly by the user, stronger than the original recommendation**: *"Discovery is AEGIS's responsibility. Business meaning is the organization's responsibility. AEGIS can recommend and assist, but never silently invent business semantics."* AEGIS auto-generates a mechanical default name for every discovered state (real page title, falling back to the URL) so nothing is ever unnamed; real business meaning (flows, journeys, "this is the Policy Creation screen") is always organization-declared in `knowledge.yml`, never fabricated — every node carries a `NameSource` so the two are never confused.
+
+## What shipped
+
+- **New package `com.aegis.core.knowledge`** — fully additive, zero changes to `WorldModel`, `NavigationEdge`, `StateSignature`, or any of the 3 frozen report generators (all on the Stable Components list). Built entirely from `ExecutionState`'s raw `Observation`/`Action` history — the same source `MissionReportData.from(...)` already independently reads to build its own `states`/`edges`, confirmed via research before design — not from the live `WorldModel` object.
+- **`KnowledgeBase`** — a type-safe catalog registry (`Map<Class<? extends KnowledgeCatalog>, KnowledgeCatalog>`), not a fixed-field record, so every future catalog (risk/business metadata, requirements, defects, historical learning) slots in later without this class ever being redesigned.
+- **`KnowledgeProvider` + `KnowledgeBaseBuilder`** — the 4 built-in catalogs are themselves `KnowledgeProvider`s, no special-casing, so the same `ServiceLoader`-based third-party extension mechanism (identical discovery pattern to Stage 2's plugins) is proven by AEGIS's own built-ins, not just theoretical.
+- **`State`/`StateCatalog`** — pure facts, zero naming: every distinct discovered state, "S1"/"S2"/... by first-discovery order (this run only, not stable across runs), url, real page title, element count, and a globally-deduplicated component count.
+- **`Node`/`NodeCatalog`** — human-named dressing over `StateCatalog`. Hybrid auto-naming: real page title if usable, else a humanized URL path, else last-resort "Unnamed State N" — nothing is ever unnamed. A stable, cross-run `key` (config-declared, or a deterministic URL-derived slug when not) is the real identity Flow/Journey declarations reference — deliberately distinct from the per-run "S1" `id`, since exploration order isn't guaranteed stable across separate runs.
+- **`Flow`/`FlowCatalog`** — declared business-capability groupings (definition only, no runtime data). A declared node key with no matching discovered node is reported via `unmatchedNodeKeys()`, not silently dropped.
+- **`JourneyDefinition`/`Journey`/`JourneyCatalog`** — the user's explicit "definition vs. execution instance" split: `JourneyDefinition` is the declared, ordered reference path; `Journey` is the real, observed sequence of distinct nodes this run actually visited, checked as a subsequence match against every declared definition. One whole-mission trace per run for v1 — sub-journey segmentation would mean AEGIS guessing where one journey ends and another begins, explicitly out of scope.
+- **`KnowledgeConfig`/`KnowledgeConfigLoader`** — a new `knowledge.yml` file, deliberately separate from `application.yml` (organization knowledge about the app, different audience/cadence than mission-run config). `KnowledgeConfig` itself lives in `aegis-core` (like `BrowserConfig` already does) since the built-in providers consume it directly; YAML loading lives in `aegis-api`'s `KnowledgeConfigLoader`, same split as every other config type. Includes a `version` field, rejected with a clear error if unrecognized — schema-evolution hygiene from day one. `urlPattern` matching is a hand-rolled `*`-wildcard glob, no new dependency.
+- **`KnowledgeBaseTextRenderer`** — the "World Model Summary" text artifact the user asked for by name, matching their example format exactly. A plain, standalone renderer — not wired into the `ReportRenderer` SPI (that interface's signature is tied to `MissionReportData`, a different pipeline).
+
+## Design process
+
+Explicitly planned before implementation per this project's own Working Agreement, since the request touches `WorldModel` (frozen) and introduces several genuinely new concepts. Research confirmed zero prior mentions of "business flow"/"journey"/"node id"/"alias" anywhere in the codebase. 3 clarifying questions resolved the naming source (hybrid auto+override), the flow/journey source (user-declared only, never inferred), and the architecture approach (additive layer) before any code was written. After an initial plan, the user requested 7 structural refinements (catalog registry instead of a fixed record, provider/builder pattern from day one, catalog-oriented naming, explicit Flow-vs-Journey definition/instance split, config versioning, per-entry metadata, a first-class `StateCatalog` separate from `NodeCatalog`) — all incorporated into the design actually built.
+
+## Verification
+
+- 29 new unit tests (`StateCatalogProviderTest`, `NodeCatalogProviderTest`, `FlowCatalogProviderTest`, `JourneyCatalogProviderTest`, `KnowledgeBaseTest`, `KnowledgeBaseBuilderTest` — including a real `ServiceLoader`-discovered test `KnowledgeProvider`, same discipline as the plugin tests elsewhere in this project — `NodeNamingTest`, `UrlPatternMatcherTest`, `KnowledgeRecordsDefensiveCopyTest`, `KnowledgeBaseTextRendererTest`, `KnowledgeConfigLoaderTest`). Full suite: 347/347 passing (was 318/318).
+- **Live-verified against a real saucedemo.com mission run**: without a `knowledge.yml`, both discovered states auto-named from the site's real (identical, as it happens — a genuine finding, not fabricated) page title "Swag Labs," demonstrating exactly why the override path matters; with a `knowledge.yml` declaring node overrides, a flow, and a journey, the override won (`NameSource.CONFIGURED`, confirmed programmatically), the flow resolved to the real per-run node ids, and the journey correctly reported `[followed this run]` since the actual observed path really did match the declared order.
+
+**This is the first slice of a layer explicitly designed to keep growing** — risk metadata, business metadata, requirements, defects, and historical learning catalogs are real, intended future work, not vague aspirations, and the `KnowledgeProvider`/`KnowledgeBase` registry mechanism was built specifically so adding them never requires revisiting this design again.
+
+---
+
+# 🟢 UX Quality Catalog + Page Inspection Layer — Two More Knowledge Enrichment Catalogs
+
+## Status
+
+Completed (2026-07-27).
+
+## Note
+
+User-requested "UX/UX testing" enablement, delivered as two more `KnowledgeProvider`s on top of Knowledge Enrichment Layer v1 rather than a new subsystem — the 5th and 6th built-in catalogs, same registry, same discipline. The 6th (Page Inspection) explicitly builds on the 5th (UX Quality) — both were designed and built together in this milestone.
+
+## What shipped
+
+**UX Quality Catalog (`UxFinding`/`UxFindingCatalog`/`UxAnalysisCatalogProvider`)** — an opinion on how good the mission's navigation experience was, built purely from `StateCatalog`/`NodeCatalog`/`JourneyCatalog` plus the raw observation history, declared independently from `com.aegis.core.report.Finding`/`BugCluster` (same precedent as `FindingRule` being declared independently of the frozen `AnomalyDetector`, rather than that fragile, string-prefix-categorized pipeline being stretched to fit a different kind of signal):
+- **Backtracking** — a state revisited more than once, severity escalating with visit count; an immediate A→B→A ping-pong is flagged worse than a distant revisit and tagged `immediateBacktrack`.
+- **Journey divergence** — extends `Journey.matchesAnyDefinition()`'s bare yes/no into a real diagnosis for any declared journey that wasn't followed: which nodes were never visited (`missingNodeKeys`) vs. visited out of order (`outOfOrderNodeKeys`), via the same greedy scan `JourneyCatalogProvider.isSubsequence` already uses.
+- **Navigation friction** — only fires against an organization-declared `expectedMaxSteps` (new optional field on `KnowledgeConfig.JourneyDefinitionConfig`), scoped to the distinct-node span between a journey's first and last declared node within the actual sequence — not the whole mission's trace, which would unfairly penalize unrelated exploration elsewhere in the run.
+- **Missing accessible name** — a structural proxy (blank text/name/id on a visible, enabled, tag-recognized interactive element): `ElementInfo` carries no role/aria data anywhere, stated honestly rather than oversold as a real audit.
+
+**Page Inspection Catalog (`InspectionFinding`/`InspectionCatalog`/`InspectionCheckProvider`)** — per-page defect inspection, needing signals no post-hoc catalog could ever recover:
+- **Live capture, added without touching any frozen component**: `SignalRecorder` (`com.aegis.core.browser`) accumulates console/network signals via a new, additive `Browser.attachSignalRecorder(...)` method (default no-op interface method; only `PlaywrightBrowser` implements it for real, registering a *second*, independent set of Playwright listeners alongside the existing anomaly-signal ones — confirmed Playwright's `on*`/`off*` pairing is standard multi-listener registration, so this can't interfere with existing wiring) and DOM snapshots via `SignalCapturingObserver`, which wraps the frozen `Observer` rather than modifying it — the exact same wrap-not-modify pattern `CompositeAnomalyDetector` already established for the frozen `AnomalyDetector`.
+- **Console checks** — console errors/warnings and uncaught exceptions (`page.onPageError`), deduplicated, with an operator-declared deny-pattern list for known third-party noise.
+- **Network checks** — passive: every 4xx/5xx response and failed request the mission's own browsing already triggered, zero extra requests.
+- **Broken links** — an *opt-in*, post-run-only active probe (real `HttpClient` HEAD, falling back to GET on 405) over same-origin hrefs collected during DOM capture, capped and rate-bound (`MAX_LINKS_TO_PROBE`), never run during exploration so it can't perturb a live mission or hammer the target server.
+- **UI checks** — real WCAG relative-luminance/contrast-ratio math (not a proxy) against an operator-declared threshold; a higher-fidelity accessible-name check than the UX Quality Catalog's proxy (resolved once at DOM-snapshot time: aria-label falling back to visible text); zero-size/off-screen elements; text overflow (`scrollWidth > clientWidth`).
+- **`InspectionConfig`** — a new `knowledge.yml` sibling of `nodes:`/`flows:`/`journeys:` (`captureDom`, `consoleWarnings`, `contrastThreshold`, `probeLinks`, `noiseDenyPatterns`), everything defaulting to a safe, low-noise, capture-conservative posture.
+- **`Aegis.run(Mission, BrowserConfig, KnowledgeConfig)`** — a new additive overload (the v1.0 stable API's own documented policy: "changes should be additive... not breaking") closing a gap flagged but left open earlier in the Knowledge Enrichment Layer's life — a real mission run driven through `Aegis.run(...)` can now actually supply a `knowledge.yml` end to end, both for node/flow/journey naming *and* for turning on live inspection capture, rather than only being reachable via direct `MissionReportData.from(...)` calls.
+
+Both catalogs render into the existing HTML/text reports the same additive way every prior Knowledge Enrichment addition has: `renderUxQuality`/`renderPageInspection` in `HtmlExplainabilityReportGenerator` (new `.badge.severity-low/medium/high/critical` CSS — the existing `.badge.success/.failure` classes are pass/fail semantics, wrong fit for a severity scale), matching new sections in `KnowledgeBaseTextRenderer`. Neither the frozen generators' existing sections nor any other frozen component changed.
+
+## Design process
+
+Full plan-mode cycle: 2 Explore-agent research passes (existing findings/report pipeline; Knowledge Enrichment Layer internals and exactly what raw data is/isn't available) plus a Plan-agent design pass for the UX Quality Catalog, then a second, independent verification research pass specifically to check the user's own more detailed Page Inspection Layer proposal against the real codebase before finalizing it as the approved plan — which surfaced and corrected five real inaccuracies in the initial draft (`page.onResponse` wasn't already wired; `CandidateActionGenerator` doesn't return a reusable element list, `Observation.elements()` does and it's tag-based only; "inspect mode" doesn't exist anywhere in the codebase; `Observer`/`DefaultMissionEngine` are frozen and must be wrapped, not edited; no precomputed observation→node-key correlation exists anywhere, every consuming provider derives its own). The UX Quality Catalog was designed, planned, and approved first, then superseded mid-implementation by the user's own more detailed Page Inspection Layer request — discovered only once implementation began that `KnowledgeBaseBuilder.standard()` still had just 4 providers, meaning UX Quality had been fully *designed* but never *built*; it was built first as an unavoidable prerequisite (the approved Page Inspection plan explicitly registers itself as "the 6th provider, after the UX Quality provider" and reuses its severity-badge CSS) before Page Inspection itself.
+
+## Verification
+
+- Clean recompile of `aegis-model`/`aegis-core`/`aegis-api` from a wiped `/tmp` build directory via manual `javac` (no `mvn` in this sandbox) after every phase, not just at the end.
+- Full `aegis-core` + `aegis-api` suite, real exit codes: 347/347 (prior baseline) → 362/362 after the UX Quality Catalog → 395/395 after the Page Inspection Layer. Zero regressions at every step.
+- The broken-link probe is genuinely tested, not just compiled: `InspectionCheckProviderTest` spins up a real local `com.sun.net.httpserver.HttpServer` with a real 200 route and a real 404 route, and asserts the prober correctly distinguishes them and correctly excludes a cross-origin href — real HTTP round-trips, not a mock.
+- `InspectionCheckProvider.contrastRatio(...)` verified against the known WCAG maximum (black on white ≈ 21:1).
+
+**Honest scope limits, stated here rather than left implicit**: the UX Quality Catalog's `JourneyCatalog` is still one whole-mission trace per run (v1's own stated limit, inherited unchanged); its accessible-name check and the Page Inspection Layer's UI checks are both scoped to tag-based interactive elements (`button`/`input`/`a`/`select`) and are blind to ARIA-role-based custom controls, the same blind spot `Observation.elements()` already has; broken-link probing and the DOM-snapshot UI checks are opt-in and off by default; "is this the right element in the right place" and "is this label text correct" are explicitly out of reach without a declared baseline AEGIS doesn't have — only objective defects (unreadable contrast, invisible controls, overflow, broken links) are in scope.
+
+---
+
+# 🟢 Plain-Language Report Summary — a 6th Independent AI Feature
+
+## Status
+
+Completed (2026-07-27).
+
+## Note
+
+User feedback, direct: the HTML report (grown genuinely technical this session — Node
+Dictionary, UX Quality, Page Inspection's raw WCAG contrast ratios and console/network signal
+types) was unreadable to a non-technical reader. Requested an LLM be used to produce a
+self-explanatory summary anyone could understand.
+
+## What shipped
+
+- **`ReportSummarizer`** (new interface, `com.aegis.core.report`) — same two-implementation
+  shape as `BugExplainer`/`RecommendationEngine`/`MissionPlanner` before it:
+  `RuleBasedReportSummarizer` (default, zero model dependency) and `LlmReportSummarizer`
+  (opt-in, same fallback-on-any-failure discipline as every other `Llm*` class — broad
+  `try/catch`, `log.warn`, always returns the rule-based text on failure, never throws, never
+  blank). A flat parameter list on the interface (mission name/goal/status, coverage, bug
+  clusters, findings-by-category, recommendation, knowledge base, rule-based fallback) rather
+  than a `MissionReportData data` parameter — deliberate: the finished record doesn't exist yet
+  at the one call site inside `MissionReportData.from(...)`, it's still being assembled from
+  these same locals, so "just pass the record" was never actually simpler.
+- **A real rule-based paragraph**, not one sentence like the pre-existing `outcomeSummary()` —
+  covers goal/outcome, coverage percent, issue counts broken into "serious"/"minor" in plain
+  words, **plus UX Quality and Page Inspection finding counts** (which `outcomeSummary()` never
+  covered, since those don't flow through `bugClusters`/`findings`), and the existing
+  recommendation. Genuinely useful with zero LLM configured — matches this project's "always
+  usable without AI, opt-in for more" philosophy every other `Llm*` feature already follows.
+- **LLM prompt** explicitly forbids jargon (DOM, locator, node/state/journey, contrast ratio,
+  WCAG, console error, raw severity enum names) and asks for real-world user-impact framing
+  instead — the same "give the model the rule-based text and ask it to improve on it" discipline
+  `LlmBugExplainer`/`LlmRecommendationEngine` already established, not a from-scratch generation.
+- **`AEGIS_LLM_REPORT_SUMMARY=enabled`** — its own independent env var, same pattern as the
+  other three report-level toggles (`AEGIS_LLM_BUG_EXPLANATIONS`/`AEGIS_LLM_RECOMMENDATIONS`/
+  `AEGIS_LLM_MISSION_PLANNING`) — a run can want this without the others.
+- **New `MissionReportData` field `plainLanguageSummary`**, threaded through a new 10-arg
+  terminal `from(...)` overload (the 9-arg overload becomes a pass-through defaulting to
+  `RuleBasedReportSummarizer`) — the same additive-overload-chain discipline used for every
+  prior addition to this record this session.
+- **Rendered first** in the HTML report — a new `#plain-summary` section right after the
+  header, before the TOC and the existing (technical) `#summary` — styled distinctly
+  (`.plain-summary-callout`, more prominent than the `.recommendation-callout` below it) so a
+  non-technical reader's eyes land on it first. HTML-only (matches `outcomeSummary()`'s existing
+  HTML-only precedent).
+
+## Verification
+
+- Clean recompile from a wiped `/tmp` build directory, no `mvn` in this sandbox.
+- Full suite: 416/416 (prior baseline, after the `SelfHealingBrowser.applySession` fix) →
+  426/426 after this feature. Zero regressions — nothing frozen redesigned, only additive
+  (`LlmChatClient` used, never modified; `HtmlExplainabilityReportGenerator` extended via a new
+  private render method + new field, the same proven pattern used 4 times already this session).
+- `LlmReportSummarizerTest` mirrors `LlmRecommendationEngineTest`'s exact fake-`LlmChatClient`
+  convention: success path, exception path, blank-response path.
+- `MissionReportDataTest` additions confirm the rule-based fallback genuinely mentions real
+  serious/minor issue counts and real UX Quality finding counts (built from a fixture whose
+  blank-attribute element produces a real, structural `MISSING_ACCESSIBLE_NAME` finding, not a
+  fabricated one) — and that the 10-arg overload's supplied summarizer is actually used, not
+  silently ignored.
+
+---
+
 # Current Sprint
 
 ## Sprint Goal

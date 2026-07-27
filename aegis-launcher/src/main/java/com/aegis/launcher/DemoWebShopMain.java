@@ -29,8 +29,8 @@ public class DemoWebShopMain {
                         "baseUrl", "https://demowebshop.tricentis.com/register",
                         "password", "Aegis!2345",
                         "successUrlContains", "registerresult",
-                        "maxIterations", "20"
-//                        "explorationStrategy", "llm"
+                        "maxIterations", "20",
+                       "explorationStrategy", "llm"
                 )
         );
 

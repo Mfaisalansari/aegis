@@ -30,6 +30,7 @@ The reusable exploration engine — depend on this directly if you don't need `a
 |---|---|---|
 | `com.aegis.core.Aegis` | `static AegisReport run(Mission mission)` | Uses `BrowserConfig.defaults()`. |
 | | `static AegisReport run(Mission mission, BrowserConfig browserConfig)` | Nothing is written to disk — see USAGE.md §8a. |
+| | `static AegisReport run(Mission mission, BrowserConfig browserConfig, KnowledgeConfig knowledgeConfig)` | Drives both node/flow/journey naming and Page Inspection Layer live capture (`knowledgeConfig.inspection()`) from one object — see USAGE.md §8e/§8f. Uses `KnowledgeConfig.empty()` (auto-naming, inspection off) when the 2-arg overload above is used instead. |
 
 ### Result types
 
@@ -64,6 +65,41 @@ Full narrative + a "what's it for" table is in USAGE.md §8b — this is the exa
 | `AuthenticatedSession` (record) | `AuthenticatedSession(List<SessionCookie> cookies, Map<String,String> localStorage, Map<String,String> sessionStorage, Map<String,String> headers, String browserProfilePath)` | Pure data — see the architectural note in USAGE.md §8b on why. Factory methods: `ofCookies(...)`, `ofBrowserProfile(...)`. |
 
 All discovered via `META-INF/services/<fully-qualified-interface-name>` (`ServiceLoader`) — no registration call needed.
+
+### Knowledge Enrichment Layer (`com.aegis.core.knowledge`)
+
+Full narrative in `ARCHITECTURE.md`'s "Knowledge Enrichment Layer" section and USAGE.md §8e/§8f — this is the exact signature reference. Built entirely from `ExecutionState`'s raw `Observation`/`Action` history plus (for the Page Inspection Catalog only) live-captured `SignalLog` data; zero dependency on `WorldModel` or any frozen component.
+
+| Type | Kind | Shape |
+|---|---|---|
+| `KnowledgeBase` | class | Type-safe catalog registry — `<T extends KnowledgeCatalog> Optional<T> get(Class<T> type)`, `<T> T require(Class<T> type)`, `Collection<KnowledgeCatalog> all()`. |
+| `KnowledgeCatalog` | interface | Marker every catalog implements — `String name()`. |
+| `KnowledgeProvider` | interface | `KnowledgeCatalog provide(KnowledgeBuildContext context)` — the extension point; discovered via `ServiceLoader` in addition to the 6 built-ins. |
+| `KnowledgeBuildContext` | record | `KnowledgeBuildContext(String applicationName, List<Observation> observations, List<Action> actions, KnowledgeConfig config, KnowledgeBase partialBase, SignalLog signals)` |
+| `KnowledgeBaseBuilder` | class | `static KnowledgeBaseBuilder standard()` (registers the 6 built-ins); `withProvider(KnowledgeProvider)`; `KnowledgeBase build(String applicationName, List<Observation> observations, List<Action> actions, KnowledgeConfig config)` and the terminal `build(..., SignalLog signals)` overload. |
+| `State` / `StateCatalog` | record | `State(String id, String stateSignature, String url, String pageTitle, int elementCount, Map<String,String> metadata)`; `StateCatalog(List<State> states, int distinctComponentCount)` — `byId(String)`, `discoveredScreenCount()` |
+| `NameSource` | enum | `CONFIGURED`, `AUTO_TITLE`, `AUTO_URL` |
+| `Node` / `NodeCatalog` | record | `Node(String stateId, String key, String displayName, String technicalName, List<String> aliases, NameSource nameSource, Map<String,String> metadata)`; `NodeCatalog(List<Node> nodes)` — `byKey(String)`, `byStateId(String)` |
+| `Flow` / `FlowCatalog` | record | `Flow(String key, String name, List<String> nodeKeys, String description, List<String> unmatchedNodeKeys, Map<String,String> metadata)`; `FlowCatalog(List<Flow> flows)` |
+| `JourneyDefinition` | record | Same shape as `Flow` — a declared, ordered reference path. |
+| `Journey` / `JourneyCatalog` | record | `Journey(List<String> actualNodeKeySequence, List<String> matchedDefinitionKeys)` — `matchesAnyDefinition()`; `JourneyCatalog(List<JourneyDefinition> definitions, List<Journey> observed)` |
+| `UxFindingType` | enum | `BACKTRACKING`, `JOURNEY_DIVERGENCE`, `NAVIGATION_FRICTION`, `MISSING_ACCESSIBLE_NAME` |
+| `UxFinding` / `UxFindingCatalog` | record | `UxFinding(UxFindingType type, FindingSeverity severity, String summary, String evidence, Map<String,String> metadata)`; `UxFindingCatalog(List<UxFinding> findings)` |
+| `UxAnalysisCatalogProvider` | class | Built-in `KnowledgeProvider` for `UxFindingCatalog` — requires `StateCatalog`/`NodeCatalog`/`JourneyCatalog` from `partialBase()`. |
+| `InspectionCheckType` | enum | `CONSOLE_ERROR`, `UNCAUGHT_EXCEPTION`, `NETWORK_FAILURE`, `BROKEN_LINK`, `LOW_CONTRAST`, `MISSING_ACCESSIBLE_NAME`, `ZERO_SIZE_ELEMENT`, `TEXT_OVERFLOW` |
+| `InspectionFinding` / `InspectionCatalog` | record | `InspectionFinding(InspectionCheckType type, FindingSeverity severity, String summary, String evidence, Map<String,String> metadata)`; `InspectionCatalog(List<InspectionFinding> findings)` |
+| `InspectionCheckProvider` | class | Built-in `KnowledgeProvider` for `InspectionCatalog` — requires `StateCatalog`, reads `KnowledgeBuildContext.signals()`. Also exposes `static Double contrastRatio(String colorCss, String backgroundCss)` (real WCAG math, package-visible for testing). |
+| `SignalLog` | record | `SignalLog(List<ConsoleSignal> console, List<NetworkSignal> network, List<DomSignal> dom)` — `empty()` factory. What `SignalRecorder` produces. |
+| `ConsoleSignal` | record | `ConsoleSignal(FindingSeverity level, String text, String location, String pageUrl, Instant capturedAt)` |
+| `NetworkSignal` | record | `NetworkSignal(String requestUrl, int status, String method, String resourceType, String pageUrl)` — `status == -1` means the request failed outright (no response). |
+| `DomSignal` / `ElementSnapshot` / `BoundingBox` | record | `DomSignal(String stateSignature, List<ElementSnapshot> elements)`; `ElementSnapshot(String locator, String accessibleName, List<String> hrefs, BoundingBox box, String color, String background, double fontSize, boolean textTruncated)`; `BoundingBox(double x, double y, double width, double height)` — `isZeroArea()`. |
+| `InspectionConfig` | record | `InspectionConfig(boolean captureDom, boolean consoleWarnings, double contrastThreshold, boolean probeLinks, List<String> noiseDenyPatterns)` — `disabled()` factory. |
+| `com.aegis.core.browser.SignalRecorder` | class | Live accumulator — `recordConsole(...)`, `recordNetwork(...)`, `recordDomSnapshot(String stateSignature, List<ElementSnapshot> elements)`, `SignalLog toSignalLog()`. Owned by mission orchestration (`EngineFactory`/`Aegis.run()`), not `ExecutionState`. |
+| `Browser.attachSignalRecorder` / `.captureElementSnapshot` | interface methods | `default void attachSignalRecorder(SignalRecorder recorder)`; `default ElementSnapshot captureElementSnapshot(String locator)` — both no-op defaults, real implementations only in `PlaywrightBrowser`. |
+| `com.aegis.core.observer.SignalCapturingObserver` | class | Wraps a delegate `Observer` (the frozen `DefaultObserver` in real use) to additionally capture a DOM snapshot per settled state — does not modify the frozen interface/impl. |
+| `KnowledgeBaseTextRenderer` | class | `String render(String applicationName, KnowledgeBase knowledgeBase)` — the "World Model Summary" text artifact, now including UX Quality and Page Inspection sections. |
+| `KnowledgeConfig` | record (`aegis-core`) | `KnowledgeConfig(int version, List<NodeConfig> nodes, List<FlowConfig> flows, List<JourneyDefinitionConfig> journeys, InspectionConfig inspection)` — nested `NodeConfig`/`FlowConfig`/`JourneyDefinitionConfig` records mirror the YAML shape; `JourneyDefinitionConfig` also carries an optional `Integer expectedMaxSteps`. `empty()` factory. |
+| `com.aegis.api.KnowledgeConfigLoader` (`aegis-api`) | class | `static KnowledgeConfig load(Path path)` / `load(InputStream in)` — parses `knowledge.yml` including the `inspection:` block; throws `AegisConfigException` on an unrecognized `version` or malformed YAML. |
 
 ---
 
@@ -106,7 +142,8 @@ See USAGE.md §8c for the YAML shape and the two-axis explanation.
 | Type | Key members |
 |---|---|
 | `com.aegis.api.Launcher` | `static MissionStatus run(AegisApplication application)`; `run(Mission mission)`; `run(Mission mission, BrowserConfig browserConfig)`; `run(Mission mission, BrowserConfig browserConfig, String reportsDirectory)` — writes all 3 report formats + any plugin reports to disk, prints console output, returns the real `MissionStatus` |
-| `com.aegis.api.ParallelMissionRunner` | `static Map<String,AegisReport> runAll(Map<String,Mission> missions, int maxConcurrency)`; overload taking an explicit `BrowserConfig` — concurrent `Aegis.run(...)` fan-out; a thrown mission doesn't stop the others from reporting |
+| `com.aegis.api.ParallelMissionRunner` | `static BatchResult runAll(Map<String,Mission> missions, int maxConcurrency)`; overload taking an explicit `BrowserConfig` — concurrent `Aegis.run(...)` fan-out; a thrown mission doesn't cost the caller the rest of the batch's reports |
+| `com.aegis.api.BatchResult` | record — `BatchResult(Map<String,AegisReport> reports, Map<String,Throwable> failures)`; `boolean hasFailures()`. Both maps keyed the same way as `runAll`'s input map. |
 
 ### Secrets & errors
 

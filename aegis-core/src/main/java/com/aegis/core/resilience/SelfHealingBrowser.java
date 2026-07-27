@@ -1,6 +1,9 @@
 package com.aegis.core.resilience;
 
 import com.aegis.core.browser.Browser;
+import com.aegis.core.browser.SignalRecorder;
+import com.aegis.core.knowledge.ElementSnapshot;
+import com.aegis.core.plugin.AuthenticatedSession;
 import com.aegis.model.observation.AnomalySignal;
 import com.aegis.model.observation.ElementInfo;
 import org.slf4j.Logger;
@@ -153,6 +156,30 @@ public final class SelfHealingBrowser implements Browser {
     @Override
     public List<AnomalySignal> drainAnomalies() {
         return delegate.drainAnomalies();
+    }
+
+    /**
+     * Was missing entirely until now — {@code Browser.applySession}'s
+     * interface default is a no-op, and this class never overrode it, so
+     * every real mission (which always runs through this decorator, per
+     * {@code EngineFactory}) silently discarded any Stage 2 pre-
+     * authenticated session ({@code SessionProvider}) instead of applying
+     * it. Found while wiring the Page Inspection Layer's own
+     * {@code attachSignalRecorder}, which had the exact same gap.
+     */
+    @Override
+    public void applySession(AuthenticatedSession session) {
+        delegate.applySession(session);
+    }
+
+    @Override
+    public void attachSignalRecorder(SignalRecorder recorder) {
+        delegate.attachSignalRecorder(recorder);
+    }
+
+    @Override
+    public ElementSnapshot captureElementSnapshot(String locator) {
+        return delegate.captureElementSnapshot(locator);
     }
 
     /**

@@ -6,6 +6,21 @@ The project follows [Semantic Versioning](https://semver.org/); see `CONTRIBUTIN
 
 ## [Unreleased]
 
+### Added — Knowledge Enrichment Layer v1
+- New `com.aegis.core.knowledge` package: a permanent, fully additive architectural layer between `WorldModel`'s raw facts and future consumers (reports, test planning, impact analysis). `KnowledgeBase` is a type-safe catalog registry (not a fixed-field record) fed by `KnowledgeProvider`s — `ServiceLoader`-discoverable, same mechanism as the existing plugin architecture — so future catalogs (risk/business metadata, requirements, defects, historical learning) slot in without redesign.
+- Built-in catalogs: `StateCatalog` (pure discovery facts), `NodeCatalog` (hybrid auto-naming — real page title, else humanized URL, never unnamed — with organization overrides always winning via a new `knowledge.yml`), `FlowCatalog` (declared business groupings), `JourneyCatalog` (declared reference paths plus the real observed path each run took, compared as a subsequence match).
+- Governing rule: AEGIS never invents business meaning — every node's name is tagged with its `NameSource` (`CONFIGURED`/`AUTO_TITLE`/`AUTO_URL`), and flows/journeys only ever come from `knowledge.yml`, never inferred from graph structure.
+- New `KnowledgeBaseTextRenderer` producing a "World Model Summary" text artifact.
+- 29 new unit tests. Live-verified against a real saucedemo.com run.
+
+### Fixed — code review follow-ups (post Stage 6)
+- CI's Playwright-install step now uses `-am` so it can actually resolve `aegis-core`'s dependency on `aegis-model` on a fresh runner — the workflow would have failed on every single run.
+- `EngineFactory.create()`'s SessionProvider leak fix no longer masks the real failure if `browser.close()` itself throws during cleanup; the close failure is now attached via `addSuppressed` instead of replacing the original exception.
+- `aegis init --base-url <value>` now escapes the value before writing it into the generated `application.yml` — a value containing a colon, quote, or newline no longer produces broken YAML.
+
+### Changed — code review follow-ups (post Stage 6)
+- **Breaking (pre-release):** `ParallelMissionRunner.runAll(...)` now returns a new `BatchResult` record (`reports`, `failures`, `hasFailures()`) instead of `Map<String, AegisReport>`. The Stage 5 fix made it wait for every mission to finish before failing, but still discarded every successful report on any single failure — contradicting its own documented intent that "a broken site shouldn't stop the rest of a batch from reporting back." `BatchResult` is what actually delivers on that: a caller now gets every successful report *and* every failure, never nothing.
+
 ### Added — Framework Adoption Stage 6: Community Release
 - `LICENSE` (Apache 2.0), `CONTRIBUTING.md`, this changelog, GitHub Actions CI (`mvn -B clean verify` on push/PR), issue and pull request templates, a front-door summary at the top of `README.MD`.
 

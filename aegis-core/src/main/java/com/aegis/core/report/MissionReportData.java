@@ -6,6 +6,12 @@ import com.aegis.core.bug.DefaultBugClusterAnalyzer;
 import com.aegis.core.bug.RecommendationEngine;
 import com.aegis.core.bug.RuleBasedBugExplainer;
 import com.aegis.core.bug.RuleBasedRecommendationEngine;
+import com.aegis.core.knowledge.InspectionCatalog;
+import com.aegis.core.knowledge.KnowledgeBase;
+import com.aegis.core.knowledge.KnowledgeBaseBuilder;
+import com.aegis.core.knowledge.KnowledgeConfig;
+import com.aegis.core.knowledge.SignalLog;
+import com.aegis.core.knowledge.UxFindingCatalog;
 import com.aegis.core.mission.MissionPlan;
 import com.aegis.core.mission.RuleBasedMissionPlanner;
 import com.aegis.core.reasoning.learning.DefaultPatternAnalyzer;
@@ -18,6 +24,7 @@ import com.aegis.model.context.MissionContext;
 import com.aegis.model.experience.Experience;
 import com.aegis.model.experience.ExperienceOutcome;
 import com.aegis.model.finding.Finding;
+import com.aegis.model.finding.FindingSeverity;
 import com.aegis.model.mission.Mission;
 import com.aegis.model.mission.MissionStatus;
 import com.aegis.model.observation.ElementInfo;
@@ -68,7 +75,9 @@ public record MissionReportData(
         Duration duration,
         int actionsExecuted,
         double averageConfidence,
-        Map<FindingCategory, List<BugCluster>> findingsByCategory
+        Map<FindingCategory, List<BugCluster>> findingsByCategory,
+        KnowledgeBase knowledgeBase,
+        String plainLanguageSummary
 ) {
 
     private static final Pattern URL_PATTERN = Pattern.compile("https?://\\S+");
@@ -157,6 +166,59 @@ public record MissionReportData(
             RecommendationEngine recommender, MissionPlan plan, List<Experience> experiences,
             List<ScreenshotSample> screenshots) {
 
+        return from(context, status, explainer, recommender, plan, experiences, screenshots, KnowledgeConfig.empty());
+    }
+
+    /**
+     * Same as the 7-arg overload, plus the Knowledge Enrichment Layer
+     * (state/node/flow/journey/ux-quality catalogs) built from this same
+     * mission's Observations/Actions. Pass {@link KnowledgeConfig#empty()}
+     * (what the 7-arg overload above does) when no organization-declared
+     * knowledge.yml is available — every node still gets an auto-generated
+     * name (real page title, else the URL), nothing is ever unnamed; a
+     * real config just lets declared names/flows/journeys win instead.
+     */
+    public static MissionReportData from(
+            MissionContext context, MissionStatus status, BugExplainer explainer,
+            RecommendationEngine recommender, MissionPlan plan, List<Experience> experiences,
+            List<ScreenshotSample> screenshots, KnowledgeConfig knowledgeConfig) {
+
+        return from(context, status, explainer, recommender, plan, experiences, screenshots, knowledgeConfig, SignalLog.empty());
+    }
+
+    /**
+     * The full overload: everything above, plus whatever {@code
+     * SignalRecorder} captured live during the run (Page Inspection
+     * Layer — console/network signals, DOM snapshots) — feeds the
+     * knowledge base's {@code InspectionCatalog} alongside the other 5
+     * built-in catalogs. Pass {@link SignalLog#empty()} (what the 8-arg
+     * overload above does) when inspection capture was disabled; the
+     * inspection findings section simply has nothing to show.
+     */
+    public static MissionReportData from(
+            MissionContext context, MissionStatus status, BugExplainer explainer,
+            RecommendationEngine recommender, MissionPlan plan, List<Experience> experiences,
+            List<ScreenshotSample> screenshots, KnowledgeConfig knowledgeConfig, SignalLog signalLog) {
+
+        return from(context, status, explainer, recommender, plan, experiences, screenshots,
+                knowledgeConfig, signalLog, new RuleBasedReportSummarizer());
+    }
+
+    /**
+     * The full overload: everything above, plus a plain-language,
+     * non-technical summary of the whole report (opt-in AI rewrite via an
+     * explicit {@link ReportSummarizer}, or {@link
+     * RuleBasedReportSummarizer} — what the 9-arg overload above uses —
+     * for a real paragraph with zero model dependency). This is the
+     * "what happened, in plain English" a non-technical reader wants
+     * before any of the technical detail below it in the HTML report.
+     */
+    public static MissionReportData from(
+            MissionContext context, MissionStatus status, BugExplainer explainer,
+            RecommendationEngine recommender, MissionPlan plan, List<Experience> experiences,
+            List<ScreenshotSample> screenshots, KnowledgeConfig knowledgeConfig, SignalLog signalLog,
+            ReportSummarizer summarizer) {
+
         List<Observation> observations = context.getExecutionState().getObservations();
         List<Action> actions = context.getExecutionState().getActions();
 
@@ -198,28 +260,39 @@ public record MissionReportData(
                 .average()
                 .orElse(0.0);
 
+        KnowledgeBase knowledgeBase = KnowledgeBaseBuilder.standard()
+                .build(mission.name(), observations, actions, knowledgeConfig, signalLog);
+
+        String missionGoal = goalStatement(mission);
+        ExplorationCoverage coverage = computeCoverage(observations, actions);
+        Map<FindingCategory, List<BugCluster>> findingsByCategory = categorizeFindings(bugClusters);
+        String recommendation = recommender.recommend(bugClusters, computeFallbackRecommendation(bugClusters));
+
         return new MissionReportData(
                 mission.name(),
-                goalStatement(mission),
+                missionGoal,
                 status,
                 List.copyOf(pages),
                 List.copyOf(states),
                 edges,
                 findings,
                 reasoningSteps,
-                computeCoverage(observations, actions),
+                coverage,
                 computePageCoverage(observations, actions),
                 computeStateVisitCounts(observations),
                 bugClusters,
                 computeBugExplanations(bugClusters, explainer),
-                recommender.recommend(bugClusters, computeFallbackRecommendation(bugClusters)),
+                recommendation,
                 plan,
                 timeline,
                 computeLearningSummary(experiences),
                 Duration.between(context.getExecutionState().getStartedAt(), endTime),
                 actions.size(),
                 averageConfidence,
-                categorizeFindings(bugClusters)
+                findingsByCategory,
+                knowledgeBase,
+                computePlainLanguageSummary(mission.name(), missionGoal, status, coverage,
+                        bugClusters, findingsByCategory, recommendation, knowledgeBase, summarizer)
         );
     }
 
@@ -468,6 +541,77 @@ public record MissionReportData(
 
     private static String firstUrlOf(BugCluster cluster) {
         return cluster.urls().isEmpty() ? "" : cluster.urls().iterator().next();
+    }
+
+    private static String computePlainLanguageSummary(
+            String missionName, String missionGoal, MissionStatus status, ExplorationCoverage coverage,
+            List<BugCluster> bugClusters, Map<FindingCategory, List<BugCluster>> findingsByCategory,
+            String recommendation, KnowledgeBase knowledgeBase, ReportSummarizer summarizer) {
+
+        String fallback = computeFallbackPlainLanguageSummary(
+                missionName, missionGoal, status, coverage, bugClusters, findingsByCategory, recommendation, knowledgeBase);
+
+        return summarizer.summarize(
+                missionName, missionGoal, status, coverage, bugClusters, findingsByCategory,
+                recommendation, knowledgeBase, fallback);
+    }
+
+    /**
+     * A real paragraph, not one sentence like {@link #outcomeSummary()} —
+     * this must be genuinely useful with zero LLM configured, matching
+     * this project's "always usable without AI, opt-in for more"
+     * philosophy. Covers UX Quality and Page Inspection finding counts
+     * too, which {@code outcomeSummary()} doesn't (they don't flow
+     * through {@code bugClusters}/{@code findings}).
+     */
+    private static String computeFallbackPlainLanguageSummary(
+            String missionName, String missionGoal, MissionStatus status, ExplorationCoverage coverage,
+            List<BugCluster> bugClusters, Map<FindingCategory, List<BugCluster>> findingsByCategory,
+            String recommendation, KnowledgeBase knowledgeBase) {
+
+        StringBuilder summary = new StringBuilder();
+
+        summary.append(status == MissionStatus.SUCCESS
+                ? "AEGIS successfully completed its test of \"" + missionName + "\": " + missionGoal + "."
+                : "AEGIS was not able to complete its test of \"" + missionName + "\" within its step limit "
+                        + "(goal: " + missionGoal + ").");
+
+        summary.append(String.format(" It tried out %.0f%% of everything on the site it found it could click or interact with.",
+                coverage.coveragePercent()));
+
+        int uxQualityFindings = knowledgeBase.get(UxFindingCatalog.class).map(c -> c.findings().size()).orElse(0);
+        int pageInspectionFindings = knowledgeBase.get(InspectionCatalog.class).map(c -> c.findings().size()).orElse(0);
+
+        if (bugClusters.isEmpty() && uxQualityFindings == 0 && pageInspectionFindings == 0) {
+            summary.append(" No problems were found along the way.");
+        } else {
+
+            List<String> parts = new ArrayList<>();
+
+            if (!bugClusters.isEmpty()) {
+                long serious = bugClusters.stream()
+                        .filter(c -> c.severity() == FindingSeverity.CRITICAL || c.severity() == FindingSeverity.HIGH)
+                        .count();
+                long minor = bugClusters.size() - serious;
+                if (serious > 0) parts.add(serious + " serious issue" + (serious == 1 ? "" : "s"));
+                if (minor > 0) parts.add(minor + " minor issue" + (minor == 1 ? "" : "s"));
+            }
+
+            if (uxQualityFindings > 0) {
+                parts.add(uxQualityFindings + " navigation/experience issue" + (uxQualityFindings == 1 ? "" : "s"));
+            }
+
+            if (pageInspectionFindings > 0) {
+                parts.add(pageInspectionFindings + " page defect" + (pageInspectionFindings == 1 ? "" : "s")
+                        + " (broken links, errors, or accessibility problems)");
+            }
+
+            summary.append(" Along the way it found ").append(String.join(", ", parts)).append('.');
+        }
+
+        summary.append(" What to do next: ").append(recommendation);
+
+        return summary.toString();
     }
 
     /**

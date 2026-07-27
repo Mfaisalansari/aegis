@@ -17,7 +17,10 @@ import com.aegis.core.anomaly.BrowserSignalAnomalyDetector;
 import com.aegis.core.anomaly.CompositeAnomalyDetector;
 import com.aegis.core.browser.Browser;
 import com.aegis.core.browser.BrowserConfig;
+import com.aegis.core.browser.SignalRecorder;
 import com.aegis.core.browser.playwright.PlaywrightBrowser;
+import com.aegis.core.knowledge.InspectionConfig;
+import com.aegis.core.knowledge.SignalLog;
 import com.aegis.core.llm.OpenAiCompatibleChatClient;
 import com.aegis.core.plugin.AuthenticatedSession;
 import com.aegis.core.plugin.BrowserFactory;
@@ -36,6 +39,7 @@ import com.aegis.core.goal.UrlContainsGoalEvaluator;
 import com.aegis.core.impl.observer.DefaultObserver;
 import com.aegis.core.impl.planner.MockPlanner;
 import com.aegis.core.observer.Observer;
+import com.aegis.core.observer.SignalCapturingObserver;
 import com.aegis.core.planner.Planner;
 import com.aegis.core.reasoning.GoalReasoner;
 import com.aegis.core.reasoning.RuleBasedGoalReasoner;
@@ -102,19 +106,21 @@ public final class EngineFactory {
      * What create() hands back: the engine to run a mission with, the
      * ExperienceRepository that engine's own LearningEngine writes to
      * during the run (needed by Reporting v2's Mission Timeline and
-     * Learning summary), and a way to read back every screenshot
+     * Learning summary), a way to read back every screenshot
      * SelfHealingBrowser captured during the run (needed by the Mission
-     * Timeline's screenshot hooks). All three are read *after* the
+     * Timeline's screenshot hooks), and a way to read back everything the
+     * Page Inspection Layer's SignalRecorder captured live (console/
+     * network signals, DOM snapshots). All four are read *after* the
      * mission finishes — create() itself runs before execute() is even
-     * called, so at this point the repository is still empty and no
-     * screenshots have been taken yet. Nothing about how the engine
-     * itself behaves changes; reporting only reads what already
-     * happened.
+     * called, so at this point the repository is still empty and nothing
+     * has been captured yet. Nothing about how the engine itself behaves
+     * changes; reporting only reads what already happened.
      */
     public record CreatedEngine(
             MissionEngine engine,
             ExperienceRepository experienceRepository,
-            Supplier<List<ScreenshotSample>> screenshots) {
+            Supplier<List<ScreenshotSample>> screenshots,
+            Supplier<SignalLog> signals) {
     }
 
     public static CreatedEngine create() {
@@ -133,6 +139,18 @@ public final class EngineFactory {
      * lookup is simply skipped then, everything else is unaffected.
      */
     public static CreatedEngine create(Mission mission, BrowserConfig browserConfig) {
+        return create(mission, browserConfig, InspectionConfig.disabled());
+    }
+
+    /**
+     * Same as the 2-arg overload, plus the Page Inspection Layer's live
+     * capture — {@link InspectionConfig#disabled()} (what the 2-arg
+     * overload above passes) means a {@link SignalRecorder} is still
+     * attached for the cheap, passive console/network listeners (there's
+     * no reason to gate those), but the DOM snapshot step — the only
+     * per-state cost this layer adds — is skipped entirely.
+     */
+    public static CreatedEngine create(Mission mission, BrowserConfig browserConfig, InspectionConfig inspectionConfig) {
 
         /*
          * Browser
@@ -163,6 +181,12 @@ public final class EngineFactory {
          * most likely to throw. Without this, an already-launched browser
          * would leak its Playwright driver subprocess — DefaultMissionEngine
          * doesn't exist yet to guarantee close() at this point.
+         *
+         * close() itself is wrapped separately (code-review follow-up):
+         * if closing the browser also throws, that must not replace the
+         * original failure — the caller needs to know the SessionProvider
+         * was the real root cause, not just that cleanup afterward failed
+         * too. addSuppressed attaches the close failure without losing it.
          */
         try {
             if (mission != null) {
@@ -175,7 +199,11 @@ public final class EngineFactory {
                 }
             }
         } catch (RuntimeException e) {
-            browser.close();
+            try {
+                browser.close();
+            } catch (RuntimeException closeFailure) {
+                e.addSuppressed(closeFailure);
+            }
             throw e;
         }
 
@@ -199,9 +227,27 @@ public final class EngineFactory {
         WorldModel worldModel = new WorldModel();
 
         /*
+         * Page Inspection Layer — live capture
+         *
+         * The recorder is always attached: console/network listeners are
+         * cheap and passive (nothing changes what the mission does), so
+         * there's no reason to gate them. The DOM snapshot step is the one
+         * genuinely added per-state cost, so *that* stays behind
+         * inspectionConfig.captureDom() — SignalCapturingObserver only
+         * wraps the observer when it's on; otherwise DefaultObserver runs
+         * completely unwrapped, unchanged from before this layer existed.
+         */
+        SignalRecorder signalRecorder = new SignalRecorder();
+        browser.attachSignalRecorder(signalRecorder);
+
+        /*
          * Observer
          */
         Observer observer = new DefaultObserver(browser, visitedStateMemory);
+
+        if (inspectionConfig.captureDom()) {
+            observer = new SignalCapturingObserver(observer, browser, signalRecorder);
+        }
 
         /*
          * Generic Candidate Generation
@@ -447,7 +493,7 @@ public final class EngineFactory {
                 experienceRecorder
         );
 
-        return new CreatedEngine(engine, experienceRepository, selfHealingBrowser::capturedScreenshots);
+        return new CreatedEngine(engine, experienceRepository, selfHealingBrowser::capturedScreenshots, signalRecorder::toSignalLog);
     }
 
     /**

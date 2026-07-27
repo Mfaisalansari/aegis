@@ -1042,6 +1042,40 @@ Verified: confirmed via grep that the existing test suite needs no real browser 
 
 ---
 
+## Post-Framework-Adoption — Code Review Follow-ups (Complete)
+
+A manual review of the Stages 4–6 diff (nothing in `ci.yml` or the Stage 5 fixes had ever actually been exercised — no `mvn` binary, no real CI runner in this sandbox) found 4 real issues, fixed here:
+
+- ✅ **CI's Playwright-install step couldn't resolve its own dependencies** — `mvn -pl aegis-core exec:java` without `-am` would fail on a fresh runner's empty local repo. Fixed.
+- ✅ **The Stage 5 leak fix could mask its own root cause** — if `browser.close()` threw during the SessionProvider cleanup, it replaced the original exception instead of just supplementing it. Fixed with `addSuppressed`.
+- ✅ **`ParallelMissionRunner` didn't actually deliver on its own documented intent** — all-or-nothing on any single mission failing, discarding successful reports along with it. New `BatchResult` record (breaking change, acceptable pre-`1.0.0`) returns every success *and* every failure.
+- ✅ **`aegis init --base-url` could generate broken YAML** — the raw value wasn't escaped before being written into the generated `application.yml`. Fixed.
+
+7 new/updated unit tests. Live-verified the two most consequential fixes (exception suppression, partial batch results) against real Playwright/real sites.
+
+---
+
+## Knowledge Enrichment Layer v1 (Complete)
+
+A new, permanent architectural layer, initiated by the user — not part of the original roadmap or the Framework Adoption initiative:
+
+```
+Explorer → WorldModel (Facts) → Knowledge Enrichment Layer → Consumers
+                                    ├── State Catalog / Node Catalog / Flow Catalog / Journey Catalog (this slice)
+                                    └── Risk/Business Metadata, Requirements, Defects, Historical Learning (future)
+```
+
+Governing principle, stated by the user: *"Discovery is AEGIS's responsibility. Business meaning is the organization's responsibility. AEGIS can recommend and assist, but never silently invent business semantics."*
+
+- ✅ New package `com.aegis.core.knowledge` — fully additive, zero changes to `WorldModel`/`NavigationEdge`/`StateSignature`/any frozen report generator. Built from `ExecutionState`'s raw history, the same source `MissionReportData` itself already independently reads.
+- ✅ **`KnowledgeBase`** — a type-safe catalog registry, not a fixed-field record, so future catalogs (risk, business metadata, requirements, defects, historical learning) slot in without ever redesigning it. **`KnowledgeProvider`/`KnowledgeBaseBuilder`** — the 4 built-ins are providers too, no special-casing, proving the same `ServiceLoader` extension mechanism a third party would use.
+- ✅ **State Catalog** (pure facts) → **Node Catalog** (hybrid auto-naming: real page title, else humanized URL, else last resort — nothing unnamed; a stable cross-run `key` distinct from the per-run "S1" `id`) → **Flow Catalog** (declared business groupings) → **Journey Catalog** (declared definitions *and* the real observed path this run took, compared as a subsequence match).
+- ✅ New `knowledge.yml` (separate from `application.yml`), versioned schema, hand-rolled glob matching, `KnowledgeBaseTextRenderer` producing the "World Model Summary" artifact.
+- Design: planned before implementation (touches the frozen `WorldModel`'s neighborhood), 3 clarifying questions up front, then 7 structural refinements the user requested after reviewing the initial plan — all incorporated.
+- 29 new unit tests. Full suite: 347/347 passing (was 318/318). **Live-verified against real saucedemo.com**: auto-naming from the real (identical, as it turned out) page title, a configured override winning, a flow resolving to real node ids, and an observed journey correctly reporting `[followed this run]`.
+
+---
+
 # Long-Term Vision
 
 AEGIS is not intended to replace Selenium or Playwright.

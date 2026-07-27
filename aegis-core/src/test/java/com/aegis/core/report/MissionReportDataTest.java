@@ -263,6 +263,83 @@ class MissionReportDataTest {
         assertEquals(customPlan.steps(), data.plan().steps());
     }
 
+    @Test
+    void defaultFromOverloadProducesARuleBasedPlainLanguageSummary() {
+
+        MissionContext context = new MissionContext(mission());
+
+        MissionReportData data = MissionReportData.from(context, MissionStatus.SUCCESS);
+
+        assertTrue(data.plainLanguageSummary().contains("Test"));
+        assertTrue(data.plainLanguageSummary().contains("successfully"));
+        assertTrue(data.plainLanguageSummary().contains("No problems were found"));
+        assertTrue(data.plainLanguageSummary().contains("What to do next:"));
+    }
+
+    @Test
+    void plainLanguageSummaryMentionsSeriousAndMinorIssueCountsInPlainWords() {
+
+        MissionContext context = new MissionContext(mission());
+
+        context.getExecutionState().addFinding(
+                new Finding(FindingSeverity.CRITICAL, "CRASH: tab crashed", "https://example.com", Instant.now()));
+        context.getExecutionState().addFinding(
+                new Finding(FindingSeverity.LOW, "CONSOLE_ERROR: minor thing", "https://example.com", Instant.now()));
+
+        MissionReportData data = MissionReportData.from(context, MissionStatus.FAILED);
+
+        assertTrue(data.plainLanguageSummary().contains("1 serious issue"));
+        assertTrue(data.plainLanguageSummary().contains("1 minor issue"));
+    }
+
+    @Test
+    void plainLanguageSummaryMentionsNavigationExperienceIssuesFromTheUxQualityCatalog() {
+
+        MissionContext context = new MissionContext(mission());
+
+        // input(...) builds an ElementInfo with blank text/name/id — a
+        // real, structural MISSING_ACCESSIBLE_NAME finding in the UX
+        // Quality catalog, not a fabricated one for this test.
+        context.getExecutionState().setCurrentObservation(observation("https://example.com", input("#a")));
+
+        MissionReportData data = MissionReportData.from(context, MissionStatus.SUCCESS);
+
+        assertTrue(data.plainLanguageSummary().contains("navigation/experience issue"));
+    }
+
+    @Test
+    void tenArgFromOverloadUsesTheSuppliedSummarizer() {
+
+        MissionContext context = new MissionContext(mission());
+
+        MissionReportData data = MissionReportData.from(
+                context, MissionStatus.SUCCESS,
+                (cluster, fallback) -> fallback,
+                (clusters, fallback) -> fallback,
+                new com.aegis.core.mission.MissionPlan(List.of("step")),
+                List.of(), List.of(), com.aegis.core.knowledge.KnowledgeConfig.empty(),
+                com.aegis.core.knowledge.SignalLog.empty(),
+                (missionName, missionGoal, status, coverage, bugClusters, findingsByCategory, recommendation, knowledgeBase, fallback) -> "custom plain-language summary");
+
+        assertEquals("custom plain-language summary", data.plainLanguageSummary());
+    }
+
+    @Test
+    void nineArgFromOverloadDefaultsToTheRuleBasedSummarizer() {
+
+        MissionContext context = new MissionContext(mission());
+
+        MissionReportData data = MissionReportData.from(
+                context, MissionStatus.SUCCESS,
+                (cluster, fallback) -> fallback,
+                (clusters, fallback) -> fallback,
+                new com.aegis.core.mission.MissionPlan(List.of("step")),
+                List.of(), List.of(), com.aegis.core.knowledge.KnowledgeConfig.empty(),
+                com.aegis.core.knowledge.SignalLog.empty());
+
+        assertTrue(data.plainLanguageSummary().contains("successfully"));
+    }
+
     private Mission mission() {
         return new Mission(UUID.randomUUID(), "Test", "Test", Map.of());
     }

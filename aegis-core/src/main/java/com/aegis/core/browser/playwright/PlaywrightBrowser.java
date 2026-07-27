@@ -2,7 +2,11 @@ package com.aegis.core.browser.playwright;
 
 import com.aegis.core.browser.Browser;
 import com.aegis.core.browser.BrowserConfig;
+import com.aegis.core.browser.SignalRecorder;
+import com.aegis.core.knowledge.BoundingBox;
+import com.aegis.core.knowledge.ElementSnapshot;
 import com.aegis.core.plugin.AuthenticatedSession;
+import com.aegis.model.finding.FindingSeverity;
 import com.aegis.model.observation.AnomalySignal;
 import com.aegis.model.observation.ElementInfo;
 import com.microsoft.playwright.BrowserType;
@@ -187,6 +191,109 @@ public class PlaywrightBrowser implements Browser {
                 dialog.dismiss();
             }
         });
+    }
+
+    /**
+     * A second, independent set of listeners on top of {@link
+     * #registerAnomalyListeners()} — Playwright's {@code on*}/{@code off*}
+     * pairing is standard multi-listener event registration, so this
+     * doesn't touch or risk the existing anomaly-signal wiring. Passive:
+     * these listeners only observe, they never change what the browser
+     * does. {@code onResponse} only records 4xx/5xx — a successful
+     * response is not a signal.
+     */
+    @Override
+    public void attachSignalRecorder(SignalRecorder recorder) {
+
+        page.onConsoleMessage(message -> {
+
+            FindingSeverity level = switch (message.type()) {
+                case "error" -> FindingSeverity.HIGH;
+                case "warning" -> FindingSeverity.LOW;
+                default -> null;
+            };
+
+            if (level != null) {
+                recorder.recordConsole(level, message.text(), message.location(), page.url());
+            }
+        });
+
+        page.onPageError(error ->
+                recorder.recordConsole(FindingSeverity.CRITICAL, error, "", page.url()));
+
+        page.onResponse(response -> {
+            if (response.status() >= 400) {
+                recorder.recordNetwork(
+                        response.url(), response.status(), response.request().method(), response.request().resourceType(), page.url());
+            }
+        });
+
+        page.onRequestFailed(request ->
+                recorder.recordNetwork(request.url(), -1, request.method(), request.resourceType(), page.url()));
+    }
+
+    /**
+     * Structural proxy only, not a real accessibility audit: {@code
+     * accessibleName} falls back from {@code aria-label} to visible text,
+     * not the full W3C accname computation. Returns {@code null} rather
+     * than throwing when the locator can't be resolved (element detached/
+     * gone since the observation that produced it) — a missed snapshot,
+     * not a bug.
+     */
+    @Override
+    public ElementSnapshot captureElementSnapshot(String locatorString) {
+
+        try {
+
+            Locator locator = page.locator(locatorString);
+
+            com.microsoft.playwright.options.BoundingBox playwrightBox = locator.boundingBox();
+            BoundingBox box = playwrightBox == null
+                    ? null
+                    : new BoundingBox(playwrightBox.x, playwrightBox.y, playwrightBox.width, playwrightBox.height);
+
+            String accessibleName = safe(locator.getAttribute("aria-label"));
+            if (accessibleName.isBlank()) {
+                accessibleName = safe(locator.textContent()).trim();
+            }
+
+            // Resolved against the page's current URL: the raw attribute
+            // can be relative ("/orders", "orders.html"), and a relative
+            // string isn't independently probeable later by the Page
+            // Inspection Layer's link checker, which has no page context
+            // of its own by the time it runs post-hoc.
+            String href = locator.getAttribute("href");
+            List<String> hrefs = List.of();
+            if (href != null && !href.isBlank()) {
+                try {
+                    hrefs = List.of(java.net.URI.create(page.url()).resolve(href).toString());
+                } catch (Exception e) {
+                    hrefs = List.of(href);
+                }
+            }
+
+            Object styleResult = locator.evaluate(
+                    "el => { const s = getComputedStyle(el); return { color: s.color, background: s.backgroundColor, "
+                            + "fontSize: parseFloat(s.fontSize), truncated: el.scrollWidth > el.clientWidth || el.scrollHeight > el.clientHeight }; }");
+
+            if (!(styleResult instanceof Map<?, ?> style)) {
+                return new ElementSnapshot(locatorString, accessibleName, hrefs, box, null, null, 0, false);
+            }
+
+            return new ElementSnapshot(
+                    locatorString,
+                    accessibleName,
+                    hrefs,
+                    box,
+                    String.valueOf(style.get("color")),
+                    String.valueOf(style.get("background")),
+                    style.get("fontSize") instanceof Number number ? number.doubleValue() : 0,
+                    Boolean.TRUE.equals(style.get("truncated"))
+            );
+
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     @Override

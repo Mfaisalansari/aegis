@@ -84,6 +84,49 @@ This is also why plugins are deliberately data-only where they touch execution: 
 
 Stage 2 ("Plugin Architecture") added `ServiceLoader`-discovered extension points without touching any component listed above. The full interface reference — what each one is for, its exact signature, and how it's selected — lives in USAGE.md §8b and `API_REFERENCE.md`; the short version: `FindingRule`/`ReportRenderer` add new detection/output without new interfaces to invent, `NamedActionScorer`/`NamedInputValueResolver` add new named strategies to the existing registries, `BrowserFactory` swaps the browser implementation, and `SessionProvider`/`CredentialProvider` handle identity — the two extension points explicitly forbidden from ever calling into the browser directly.
 
+## Knowledge Enrichment Layer
+
+A permanent architectural layer, not a one-off feature — sits between the raw facts AEGIS discovers and everything that eventually consumes them:
+
+```
+Explorer → WorldModel (Facts) → Knowledge Enrichment Layer → Consumers
+                                    ├── State Catalog (facts)
+                                    ├── Node Catalog (facts + naming)
+                                    ├── Flow Catalog
+                                    ├── Journey Catalog
+                                    ├── UX Quality Catalog (backtracking, journey divergence,
+                                    │   navigation friction, structural accessible-name signal)
+                                    ├── Page Inspection Catalog (console errors, network failures,
+                                    │   broken links, contrast/accessible-name/size/overflow checks)
+                                    ├── Risk/Business Metadata, Requirements, Defects, Historical Learning (future)
+                                    └── (Reports, Test Planner, Impact Analyzer, Recommendation Engine, AI Assistant)
+```
+
+**Governing principle**: *discovery is AEGIS's responsibility, business meaning is the organization's responsibility.* AEGIS auto-generates a mechanical default name for every discovered state (from the real page title, falling back to the URL) so nothing is ever unnamed — but real business meaning (this is the "Policy Creation" flow, this sequence is the "New Customer Onboarding" journey) is always organization-declared in `knowledge.yml`, never fabricated by AEGIS. Every node is tagged with a `NameSource` (`CONFIGURED`/`AUTO_TITLE`/`AUTO_URL`) so a reader can always tell which is which. The same discipline extends to the two quality-analysis catalogs below: they report facts (a backtrack happened, a console error fired) and only render a judgment call ("too many steps") against an organization-declared expectation, never an invented one.
+
+**Fully additive, zero changes to any frozen component** — `com.aegis.core.knowledge` is built entirely from `ExecutionState`'s raw `Observation`/`Action` history (the same source `MissionReportData` itself already independently reads to build its own `states`/`edges`), never from the live `WorldModel` object. `WorldModel`, `NavigationEdge`, `StateSignature`, `Observer`, `AnomalyDetector`, and the 3 report generators remain completely untouched. The Page Inspection Layer's live capture (see below) needed genuinely new signals `Observation`/`ElementInfo` were never designed to carry (console output, network status, computed style); rather than touch the frozen `Observer`, capture is added by *wrapping* it — `SignalCapturingObserver` delegates to the real `Observer` first, then records — the same wrap-not-modify pattern `CompositeAnomalyDetector` already established for the frozen `AnomalyDetector`.
+
+**Extensible by design, not by promise**: `KnowledgeBase` is a type-safe registry (`Map<Class<? extends KnowledgeCatalog>, KnowledgeCatalog>`), not a fixed-field record — every future catalog (risk metadata, business metadata, requirements, defects, historical learning) slots in as a new `KnowledgeProvider` without ever touching `KnowledgeBase` itself. The 6 built-in catalogs (state/node/flow/journey/ux-quality/page-inspection) are implemented as `KnowledgeProvider`s too, no special-casing, so the same `ServiceLoader`-based extension mechanism a third party would use is proven by AEGIS's own built-ins — identical discovery pattern to Stage 2's plugins.
+
+- **State Catalog** — pure facts: every distinct discovered state (`StateSignature`), a per-run label ("S1", "S2", ... by first-discovery order), url, page title, element count.
+- **Node Catalog** — the same states, dressed with names: a stable cross-run `key` (config-declared or URL-derived), `displayName`/`technicalName`/`aliases`, all with a visible `NameSource`.
+- **Flow Catalog** — declared business-capability groupings of node keys (a *definition*, no runtime data).
+- **Journey Catalog** — declared, ordered reference paths (`JourneyDefinition`) *plus* what actually happened this run (`Journey`, an execution instance — the real, observed sequence of distinct nodes visited, checked against each definition as a subsequence match). AEGIS never segments one run into multiple sub-journeys or guesses at flow/journey groupings from graph structure — that would mean inventing business intent it doesn't have; both are explicit future "recommend and assist" work, not this layer's job today.
+- **UX Quality Catalog** — an opinion on how good the navigation experience was, built purely from the catalogs above plus the raw observation/action history: backtracking (a state revisited, with immediate A→B→A ping-pong flagged worse than a distant revisit), journey divergence (for a declared journey that wasn't followed — *which* nodes were missing vs. out of order, not just a yes/no), navigation friction (only when the organization declared an `expectedMaxSteps` for a journey), and a structural accessible-name signal (an interactive element with blank text/name/id — honestly a proxy, since `ElementInfo` carries no role/aria data).
+- **Page Inspection Catalog** — per-page defect inspection: console errors and uncaught exceptions, network failures (4xx/5xx/failed requests), broken in-app links (opt-in active probe, post-run only, same-origin, rate-limited), and DOM-snapshot-based UI checks (real WCAG contrast-ratio math, a higher-fidelity accessible-name check than the UX Quality Catalog's proxy, zero-size/off-screen elements, text overflow). Needs signals no post-hoc catalog can recover on its own — see "live capture" below.
+
+### Live capture (Page Inspection Layer only)
+
+Every other catalog is post-hoc — built entirely from what's already recorded in `ExecutionState` after the mission finishes. Console output and network activity are ephemeral (gone the moment they fire), and computed style/bounding-box data was never captured at all — so the Page Inspection Catalog alone needs a live capture step *during* the mission:
+
+- **`SignalRecorder`** (`com.aegis.core.browser`) accumulates signals over the run — owned by mission orchestration (`EngineFactory`/`Aegis.run()`), never stored on `ExecutionState`/`MissionContext`, so no frozen component needs a new field.
+- **Console/network** — `Browser.attachSignalRecorder(SignalRecorder)`, a new additive interface method (default no-op; `PlaywrightBrowser` is the only real implementation) registers a second, independent set of Playwright listeners alongside the existing anomaly-signal ones. Always attached — passive and cheap, no reason to gate it.
+- **DOM snapshots** — `SignalCapturingObserver` (wraps the frozen `Observer`, doesn't modify it) captures bounding box, computed style, and accessible name per element, only when `InspectionConfig.captureDom()` is on — the one genuinely added per-state cost this layer introduces.
+
+`InspectionConfig` is a `knowledge.yml` sibling of `nodes:`/`flows:`/`journeys:` (same file, same loader, a different kind of declaration — operational tuning, not business meaning). Everything defaults to a safe, low-noise posture; broken-link probing in particular is off by default, runs only after the mission completes, and never during exploration.
+
+See `API_REFERENCE.md` for exact signatures and `USAGE.md` for a worked `knowledge.yml` example.
+
 ## Memory Scope
 
 Memory (`ExecutionMemory`, `VisitedStateMemory`, `WorldModel`) is in-run only, not persisted across separate runs.

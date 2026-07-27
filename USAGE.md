@@ -221,7 +221,7 @@ export AEGIS_LLM_API_KEY=sk-...
 
 ### Where the LLM actually gets used
 
-There are five independent AI features. Every one of them falls back to a deterministic default on any failure (network error, timeout, malformed response) — a bad model response degrades behavior, it never crashes a mission or executes something unvalidated.
+There are six independent AI features. Every one of them falls back to a deterministic default on any failure (network error, timeout, malformed response) — a bad model response degrades behavior, it never crashes a mission or executes something unvalidated.
 
 | Feature | How to enable | Class | Falls back to |
 |---|---|---|---|
@@ -230,8 +230,11 @@ There are five independent AI features. Every one of them falls back to a determ
 | Recommendation | env var `AEGIS_LLM_RECOMMENDATIONS=enabled` | `LlmRecommendationEngine` | `RuleBasedRecommendationEngine` |
 | Mission parsing | code-level — construct `new LlmMissionParser(...)` explicitly (see `NaturalLanguageMissionMain`) | `LlmMissionParser` | `RuleBasedMissionParser` |
 | Mission planning | env var `AEGIS_LLM_MISSION_PLANNING=enabled` | `LlmMissionPlanner` | `RuleBasedMissionPlanner` |
+| Plain-language report summary | env var `AEGIS_LLM_REPORT_SUMMARY=enabled` | `LlmReportSummarizer` | `RuleBasedReportSummarizer` |
 
-Note the inconsistency between the first entry (a mission parameter) and the rest (environment variables) — action scoring affects *what the mission does*, so it's a per-mission choice; the other four only affect *reporting/parsing* and are opt-in globally per run, independent of each other. You can enable any combination.
+Note the inconsistency between the first entry (a mission parameter) and the rest (environment variables) — action scoring affects *what the mission does*, so it's a per-mission choice; the other five only affect *reporting/parsing* and are opt-in globally per run, independent of each other. You can enable any combination.
+
+**Plain-language report summary** is the "In Plain English" section at the very top of the HTML report, above the technical Executive Summary — a rewrite of the whole mission result (goal, outcome, coverage, issue counts including UX Quality/Page Inspection findings, and the recommendation) in language a non-technical reader can follow, with no severity enums, contrast ratios, or DOM/locator jargon. Even with `AEGIS_LLM_REPORT_SUMMARY` unset, `RuleBasedReportSummarizer` still produces a real multi-sentence paragraph from the same data — the LLM only rewrites it in plainer language, it doesn't add facts the rule-based version doesn't already have.
 
 **The mission plan is purely advisory** — even with `AEGIS_LLM_MISSION_PLANNING=enabled`, nothing in the live reasoning pipeline (`GoalReasoner`, `ActionScorer`, `CandidateFilter`) ever reads the generated plan. It's a preview shown in the console and the report, generated before the mission runs; it cannot influence what the mission actually does.
 
@@ -405,13 +408,17 @@ Programmatically: `EnterpriseConfigLoader.load(path)` → `EnterpriseConfig`, th
 ### Parallel execution
 
 ```java
-Map<String, AegisReport> results = ParallelMissionRunner.runAll(
+BatchResult batch = ParallelMissionRunner.runAll(
         Map.of("saucedemo", saucedemoMission, "orangehrm", orangeHrmMission),
         2   // max concurrency
 );
+
+batch.reports();      // Map<String, AegisReport> — every mission that completed
+batch.failures();     // Map<String, Throwable> — every mission that threw
+batch.hasFailures();  // true if failures() is non-empty
 ```
 
-Runs independent missions concurrently — safe with no extra setup, since every `Aegis.run(...)` call already builds its own fresh browser/state internally. If one mission throws, the others still report back rather than the whole batch aborting.
+Runs independent missions concurrently — safe with no extra setup, since every `Aegis.run(...)` call already builds its own fresh browser/state internally. A mission throwing doesn't cost you the rest of the batch: `runAll` waits for every mission to finish, then hands back a `BatchResult` carrying both the successful `AegisReport`s and the failures, each keyed the same way as the input map — a broken site among 10 shouldn't mean losing the other 9 real reports.
 
 ### The `aegis-cli` command
 
@@ -506,12 +513,114 @@ Everything needed to run a mission is in place.
 
 ---
 
+## 8e. The Knowledge Enrichment Layer — Node Dictionary, Flows, Journeys
+
+A permanent layer, not a one-off reporting feature — see `ARCHITECTURE.md`'s "Knowledge Enrichment Layer" section for the full architectural picture. In short: AEGIS discovers states and gives every one a mechanical default name (from the real page title, or the URL if the title isn't usable); an organization can optionally declare real names/flows/journeys in a `knowledge.yml` file, which always wins over the auto-generated default. AEGIS never invents business meaning on its own.
+
+```java
+import com.aegis.core.Aegis;
+import com.aegis.core.AegisReport;
+import com.aegis.core.knowledge.KnowledgeBase;
+import com.aegis.core.knowledge.KnowledgeBaseBuilder;
+import com.aegis.core.knowledge.KnowledgeBaseTextRenderer;
+import com.aegis.core.knowledge.KnowledgeConfig;
+import com.aegis.api.KnowledgeConfigLoader;
+
+AegisReport report = Aegis.run(mission, browserConfig);
+
+var executionState = report.missionResult().context().getExecutionState();
+
+KnowledgeConfig config = KnowledgeConfigLoader.load(Path.of("knowledge.yml")); // or KnowledgeConfig.empty()
+
+KnowledgeBase knowledgeBase = KnowledgeBaseBuilder.standard()
+        .build("Insurance Portal", executionState.getObservations(), executionState.getActions(), config);
+
+System.out.println(new KnowledgeBaseTextRenderer().render("Insurance Portal", knowledgeBase));
+```
+
+`knowledge.yml` (deliberately a separate file from `application.yml` — this is organization knowledge about the app, edited by a different audience/cadence than mission-run config):
+
+```yaml
+version: 1
+
+nodes:
+  - urlPattern: "*/customers/search*"
+    key: customer-search
+    displayName: "Customer Search"
+    technicalName: "CUST_SEARCH"
+    aliases: ["Find Customer"]
+    metadata: { owner: "billing-team" }
+
+flows:
+  - key: policy-creation
+    name: "Policy Creation"
+    nodes: [customer-search, customer-details, create-policy, premium-calculation, payment, confirmation]
+
+journeys:
+  - key: new-customer-onboarding
+    name: "New Customer Onboarding"
+    nodes: [login, dashboard, create-policy, payment, confirmation]
+    expectedMaxSteps: 6   # optional — see §8f, only used by the UX Quality Catalog's navigation-friction check
+```
+
+`urlPattern` supports a simple `*` wildcard (e.g. `*/customers/*`) — the first matching entry in declaration order wins. Any field a matched entry doesn't set (e.g. just `displayName`, no `key`) falls back to the auto-naming heuristic for that field independently — overriding one thing doesn't require declaring everything.
+
+A declared `nodes:` key in a flow/journey that AEGIS hasn't discovered yet is reported (not silently dropped) via `Flow.unmatchedNodeKeys()`/`JourneyDefinition.unmatchedNodeKeys()` — useful signal that the flow covers a screen this run never reached. A journey's `matchesAnyDefinition()` reports whether the real, observed path this run took actually followed a declared journey's order (a subsequence match, not required to be contiguous).
+
+Third parties can contribute entirely new catalogs (risk metadata, defects, requirements, ...) by implementing `com.aegis.core.knowledge.KnowledgeProvider` and registering it via `META-INF/services` — the same discovery mechanism as the Stage 2 plugins in §8b — without `KnowledgeBase` itself ever needing to change.
+
+A real mission run can supply `knowledge.yml` end to end via a third `Aegis.run(...)` overload, instead of the manual `KnowledgeBaseBuilder` example above (still useful for building a `KnowledgeBase` from an already-finished `ExecutionState` without re-running anything):
+
+```java
+KnowledgeConfig config = KnowledgeConfigLoader.load(Path.of("knowledge.yml"));
+AegisReport report = Aegis.run(mission, browserConfig, config);
+// report.htmlReport() now reflects real declared names/flows/journeys,
+// plus live-captured UX Quality / Page Inspection findings if inspection: is configured — see §8f.
+```
+
+---
+
+## 8f. UX Quality and Page Inspection — the 5th and 6th catalogs
+
+Two more built-in catalogs, same registry, same governing principle as §8e: AEGIS reports facts, and only renders a judgment call against an expectation the organization actually declared.
+
+**UX Quality Catalog** needs no new config to produce most of its findings — backtracking (a state revisited more than once), journey divergence (a declared journey that wasn't followed, with a real diagnosis of what went wrong, not just yes/no), and a structural accessible-name check all run automatically. The one opt-in piece is navigation friction, gated behind `expectedMaxSteps` on a `journeys:` entry (see the `knowledge.yml` example above) — it only ever fires when you've told AEGIS what "too many steps" means for that journey.
+
+**Page Inspection Catalog** needs live capture *during* the mission, so it's off by default. Turn it on via `knowledge.yml`'s `inspection:` block:
+
+```yaml
+inspection:
+  captureDom: true          # required for every UI check (contrast/accessible-name/size/overflow) — the only added per-state cost
+  consoleWarnings: false    # emit findings for console warnings, not just errors/uncaught exceptions
+  contrastThreshold: 4.5    # WCAG AA normal-text default; use 3.0 for large text
+  probeLinks: false         # opt-in, active HEAD/GET probe of same-origin links, post-run only, never during exploration
+  noiseDenyPatterns: []     # regexes to suppress known third-party console noise (e.g. an analytics widget's own errors)
+```
+
+```java
+KnowledgeConfig config = KnowledgeConfigLoader.load(Path.of("knowledge.yml"));
+AegisReport report = Aegis.run(mission, browserConfig, config);
+```
+
+With `captureDom: true` and a real accessibility/contrast issue on the site, the HTML report's "Page Inspection" section renders something like:
+
+```
+Type                      Severity  Summary                                                Evidence
+LOW_CONTRAST              MEDIUM    Text contrast ratio 2.14:1 is below the 4.5:1 threshold  [name='subtitle']
+MISSING_ACCESSIBLE_NAME   MEDIUM    Element has no discoverable accessible name               :nth-match(button, 3)
+CONSOLE_ERROR             HIGH      Console message: ReferenceError: trackEvent is not defined  https://.../checkout
+```
+
+Console/network checks need no `captureDom` at all — the listeners behind them are always attached (passive, cheap); only the DOM-snapshot-based UI checks and the broken-link probe's link collection depend on it. `probeLinks` never runs during exploration and is capped/rate-bound — it cannot perturb a live mission or hammer the target server. Neither catalog claims more than it can back up: accessible-name checks (both catalogs) are scoped to tag-recognized interactive elements (`button`/`input`/`a`/`select`) and blind to ARIA-role-based custom controls, and neither checks whether an element is in the *right* place or its label text is *correct* — only objective defects (unreadable contrast, invisible controls, overflow, broken links, real console/network errors) are in scope.
+
+---
+
 ## 9. Troubleshooting
 
 - **Mission always ends `FAILED` with 0 findings**: check `successUrlContains` is actually set and matches a real URL substring the site reaches — without it, `UrlContainsGoalEvaluator` never resolves and the mission runs out its `maxIterations` (default 10) every time.
 - **Login never succeeds**: confirm `username`/`password` are set as mission parameters — without them, `DefaultInputValueResolver` fills generic placeholder values, not real credentials.
 - **`IllegalArgumentException: Unknown exploration strategy` / `Unknown input strategy`**: the value doesn't match one of the exact keys in §5 or §4 — these are case-sensitive exact string matches, not fuzzy.
-- **LLM features silently doing nothing**: the three report-level env vars (`AEGIS_LLM_BUG_EXPLANATIONS`, `AEGIS_LLM_RECOMMENDATIONS`, `AEGIS_LLM_MISSION_PLANNING`) require the value to be exactly `enabled` (case-insensitive) — anything else, including unset, is off.
+- **LLM features silently doing nothing**: the four report-level env vars (`AEGIS_LLM_BUG_EXPLANATIONS`, `AEGIS_LLM_RECOMMENDATIONS`, `AEGIS_LLM_MISSION_PLANNING`, `AEGIS_LLM_REPORT_SUMMARY`) require the value to be exactly `enabled` (case-insensitive) — anything else, including unset, is off.
 - **Playwright fails to launch**: confirm Chromium is installed (see §1); check for a stale lock/profile directory if a previous run crashed mid-launch.
 - **A plugin doesn't seem to be discovered**: confirm its jar (or, when running from compiled classes, its output directory) is actually on the runtime classpath, and that `META-INF/services/<fully-qualified-interface-name>` exists and contains your implementation's fully-qualified class name on its own line — a typo there means `ServiceLoader` silently finds nothing, no error.
 - **`IllegalArgumentException: Unknown browser type`**: `browser.type` doesn't match chromium/firefox/webkit and no discovered `BrowserFactory` plugin's `type()` matches it either — check the plugin is on the classpath (see above) and the name matches exactly (case-insensitive).

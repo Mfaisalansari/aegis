@@ -209,6 +209,23 @@ class SelfHealingBrowserTest {
         assertTrue(browser.capturedScreenshots().isEmpty());
     }
 
+    /**
+     * Regression test: {@code applySession} was missing an override
+     * entirely, so it silently fell through to {@link Browser}'s no-op
+     * default instead of ever reaching the wrapped browser — discovered
+     * live, not by a prior test, since none existed for this method.
+     */
+    @Test
+    void appliesASessionThroughToTheWrappedBrowser() {
+
+        RecordingBrowser fake = new RecordingBrowser();
+        SelfHealingBrowser browser = new SelfHealingBrowser(fake, NO_DELAY, RETRY_TIMEOUT);
+
+        browser.applySession(com.aegis.core.plugin.AuthenticatedSession.ofBrowserProfile("/tmp/some-profile"));
+
+        assertEquals(List.of("applySession"), fake.calls);
+    }
+
     private static final class RecordingBrowser implements Browser {
 
         final List<String> calls = new ArrayList<>();
@@ -382,6 +399,11 @@ class SelfHealingBrowserTest {
             }
 
             return screenshotBytes;
+        }
+
+        @Override
+        public void applySession(com.aegis.core.plugin.AuthenticatedSession session) {
+            calls.add("applySession");
         }
     }
 }

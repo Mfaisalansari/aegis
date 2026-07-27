@@ -5,6 +5,23 @@ import com.aegis.core.bug.BugExplainer;
 import com.aegis.core.bug.RecommendationEngine;
 import com.aegis.core.bug.RuleBasedBugExplainer;
 import com.aegis.core.bug.RuleBasedRecommendationEngine;
+import com.aegis.core.knowledge.Flow;
+import com.aegis.core.knowledge.FlowCatalog;
+import com.aegis.core.knowledge.Journey;
+import com.aegis.core.knowledge.JourneyCatalog;
+import com.aegis.core.knowledge.JourneyDefinition;
+import com.aegis.core.knowledge.KnowledgeBase;
+import com.aegis.core.knowledge.NameSource;
+import com.aegis.core.knowledge.Node;
+import com.aegis.core.knowledge.NodeCatalog;
+import com.aegis.core.knowledge.InspectionCatalog;
+import com.aegis.core.knowledge.InspectionFinding;
+import com.aegis.core.knowledge.KnowledgeConfig;
+import com.aegis.core.knowledge.SignalLog;
+import com.aegis.core.knowledge.State;
+import com.aegis.core.knowledge.StateCatalog;
+import com.aegis.core.knowledge.UxFinding;
+import com.aegis.core.knowledge.UxFindingCatalog;
 import com.aegis.core.mission.MissionPlan;
 import com.aegis.core.mission.RuleBasedMissionPlanner;
 import com.aegis.core.reasoning.learning.PatternStatistics;
@@ -24,6 +41,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
@@ -88,6 +106,17 @@ public class HtmlExplainabilityReportGenerator {
         return generate(MissionReportData.from(context, status, explainer, recommender, plan, experiences, screenshots));
     }
 
+    /** Same report, with the plain-language summary (see {@link ReportSummarizer}) also computed via the given summarizer. */
+    public String generate(
+            MissionContext context, MissionStatus status, BugExplainer explainer,
+            RecommendationEngine recommender, MissionPlan plan, List<Experience> experiences,
+            List<ScreenshotSample> screenshots, KnowledgeConfig knowledgeConfig,
+            SignalLog signalLog, ReportSummarizer summarizer) {
+
+        return generate(MissionReportData.from(context, status, explainer, recommender, plan, experiences,
+                screenshots, knowledgeConfig, signalLog, summarizer));
+    }
+
     /** Stage 2: renders directly from an already-built {@link MissionReportData} — see ExplainabilityReportGenerator's javadoc on its own overload. */
     public String generate(MissionReportData data) {
 
@@ -99,6 +128,7 @@ public class HtmlExplainabilityReportGenerator {
         html.append("</head><body>");
 
         html.append(renderHeader(data));
+        html.append(renderPlainLanguageSummary(data));
         html.append(renderTableOfContents());
         html.append(renderSummary(data));
         html.append(renderRecommendation(data));
@@ -119,6 +149,23 @@ public class HtmlExplainabilityReportGenerator {
         return html.toString();
     }
 
+    /**
+     * The very first thing a non-technical reader sees below the title —
+     * a plain-language rewrite of the whole report (see {@link
+     * ReportSummarizer}), rule-based by default or a real LLM rewrite
+     * when opted into ({@code AEGIS_LLM_REPORT_SUMMARY=enabled}). Styled
+     * distinctly from the recommendation callout below it — this is a
+     * different kind of content ("what happened, in plain English"), not
+     * "what to do about it".
+     */
+    private String renderPlainLanguageSummary(MissionReportData data) {
+
+        return "<section id=\"plain-summary\" class=\"plain-summary-callout\">"
+                + "<div class=\"plain-summary-label\">In Plain English</div>"
+                + "<p class=\"plain-summary-text\">" + escape(data.plainLanguageSummary()) + "</p>"
+                + "</section>";
+    }
+
     private String renderHeader(MissionReportData data) {
 
         String statusClass = data.status() == MissionStatus.SUCCESS ? "success" : "failure";
@@ -137,6 +184,7 @@ public class HtmlExplainabilityReportGenerator {
     private String renderTableOfContents() {
 
         return "<nav class=\"toc\">"
+                + "<a href=\"#plain-summary\">In Plain English</a>"
                 + "<a href=\"#summary\">Summary</a>"
                 + "<a href=\"#recommendation\">Recommendation</a>"
                 + "<a href=\"#stats\">Statistics</a>"
@@ -418,12 +466,183 @@ public class HtmlExplainabilityReportGenerator {
 
         for (String state : states) {
             long visits = data.stateVisitCounts().getOrDefault(state, 1L);
-            section.append(renderNode(state, positions.get(state), nodeRadii.get(state), visits, index++));
+            section.append(renderNode(data.knowledgeBase(), state, positions.get(state), nodeRadii.get(state), visits, index++));
         }
 
-        section.append("</svg></section>");
+        section.append("</svg>");
+        section.append(renderNodeDictionary(data.knowledgeBase()));
+        section.append(renderFlowsAndJourneys(data.knowledgeBase()));
+        section.append(renderUxQuality(data.knowledgeBase()));
+        section.append(renderPageInspection(data.knowledgeBase()));
+        section.append("</section>");
 
         return section.toString();
+    }
+
+    /**
+     * Knowledge Enrichment Layer integration: the same node dictionary
+     * KnowledgeBaseTextRenderer prints, as an HTML table alongside the
+     * graph — every node's display name plus where that name came from
+     * (NameSource), so a reader can always tell an organization-declared
+     * name apart from AEGIS's own auto-generated guess.
+     */
+    private String renderNodeDictionary(KnowledgeBase knowledgeBase) {
+
+        List<Node> nodes = knowledgeBase.get(NodeCatalog.class).map(NodeCatalog::nodes).orElse(List.of());
+
+        if (nodes.isEmpty()) {
+            return "";
+        }
+
+        StringBuilder table = new StringBuilder(
+                "<h3>Node Dictionary</h3><table><thead><tr><th>ID</th><th>Name</th><th>Source</th></tr></thead><tbody>");
+
+        for (Node node : nodes) {
+            table.append("<tr><td>").append(escape(node.stateId())).append("</td>")
+                    .append("<td>").append(escape(node.displayName())).append("</td>")
+                    .append("<td><span class=\"name-source ").append(node.nameSource().name().toLowerCase()).append("\">")
+                    .append(node.nameSource() == NameSource.CONFIGURED ? "configured" : "auto")
+                    .append("</span></td></tr>");
+        }
+
+        table.append("</tbody></table>");
+
+        return table.toString();
+    }
+
+    /**
+     * Declared business flows and journeys (definition + whether this
+     * run's actual path followed it) — always organization-declared via
+     * knowledge.yml, never invented by AEGIS. Renders nothing when none
+     * are declared, same as every other optional section in this report.
+     */
+    private String renderFlowsAndJourneys(KnowledgeBase knowledgeBase) {
+
+        List<Flow> flows = knowledgeBase.get(FlowCatalog.class).map(FlowCatalog::flows).orElse(List.of());
+        JourneyCatalog journeyCatalog = knowledgeBase.get(JourneyCatalog.class).orElse(null);
+        List<JourneyDefinition> journeys = journeyCatalog == null ? List.of() : journeyCatalog.definitions();
+
+        if (flows.isEmpty() && journeys.isEmpty()) {
+            return "";
+        }
+
+        StringBuilder out = new StringBuilder();
+
+        if (!flows.isEmpty()) {
+            out.append("<h3>Flows</h3><ul class=\"flow-list\">");
+            for (Flow flow : flows) {
+                out.append("<li><strong>").append(escape(flow.name())).append(":</strong> ")
+                        .append(escape(String.join(" → ", flow.nodeKeys())));
+                if (!flow.unmatchedNodeKeys().isEmpty()) {
+                    out.append(" <span class=\"meta\">(not yet discovered: ")
+                            .append(escape(String.join(", ", flow.unmatchedNodeKeys()))).append(")</span>");
+                }
+                out.append("</li>");
+            }
+            out.append("</ul>");
+        }
+
+        if (!journeys.isEmpty()) {
+
+            List<Journey> observed = journeyCatalog.observed();
+
+            out.append("<h3>Journeys</h3><ul class=\"flow-list\">");
+            for (JourneyDefinition definition : journeys) {
+
+                boolean followedThisRun = observed.stream()
+                        .anyMatch(journey -> journey.matchedDefinitionKeys().contains(definition.key()));
+
+                out.append("<li><strong>").append(escape(definition.name())).append(":</strong> ")
+                        .append(escape(String.join(" → ", definition.nodeKeys())));
+                if (!definition.unmatchedNodeKeys().isEmpty()) {
+                    out.append(" <span class=\"meta\">(not yet discovered: ")
+                            .append(escape(String.join(", ", definition.unmatchedNodeKeys()))).append(")</span>");
+                }
+                out.append(followedThisRun
+                        ? " <span class=\"badge success\">followed this run</span>"
+                        : " <span class=\"meta\">(not followed this run)</span>");
+                out.append("</li>");
+            }
+            out.append("</ul>");
+        }
+
+        return out.toString();
+    }
+
+    /**
+     * How good this run's navigation experience actually was — backtracking,
+     * declared-journey divergence, navigation friction, and structural
+     * accessible-name signals from {@link UxFindingCatalog}. Renders
+     * nothing when there are no findings, same as every other optional
+     * section in this report.
+     */
+    private String renderUxQuality(KnowledgeBase knowledgeBase) {
+
+        List<UxFinding> findings = knowledgeBase.get(UxFindingCatalog.class)
+                .map(UxFindingCatalog::findings)
+                .orElse(List.of());
+
+        if (findings.isEmpty()) {
+            return "";
+        }
+
+        StringBuilder table = new StringBuilder(
+                "<h3>UX Quality</h3><table><thead><tr><th>Type</th><th>Severity</th><th>Summary</th><th>Evidence</th></tr></thead><tbody>");
+
+        for (UxFinding finding : findings) {
+            table.append("<tr><td>").append(escape(finding.type().name())).append("</td>")
+                    .append("<td><span class=\"badge severity-").append(finding.severity().name().toLowerCase()).append("\">")
+                    .append(escape(finding.severity().name())).append("</span></td>")
+                    .append("<td>").append(escape(finding.summary())).append("</td>")
+                    .append("<td>").append(escape(finding.evidence())).append("</td></tr>");
+        }
+
+        table.append("</tbody></table>");
+
+        return table.toString();
+    }
+
+    /**
+     * Console errors/exceptions, network failures, broken links, and UI
+     * checks (contrast, accessible name, zero-size, overflow) from {@link
+     * InspectionCatalog}. Renders nothing when there are no findings —
+     * either nothing was wrong, or inspection capture was never enabled.
+     */
+    private String renderPageInspection(KnowledgeBase knowledgeBase) {
+
+        List<InspectionFinding> findings = knowledgeBase.get(InspectionCatalog.class)
+                .map(InspectionCatalog::findings)
+                .orElse(List.of());
+
+        if (findings.isEmpty()) {
+            return "";
+        }
+
+        StringBuilder table = new StringBuilder(
+                "<h3>Page Inspection</h3><table><thead><tr><th>Type</th><th>Severity</th><th>Summary</th><th>Evidence</th></tr></thead><tbody>");
+
+        for (InspectionFinding finding : findings) {
+            table.append("<tr><td>").append(escape(finding.type().name())).append("</td>")
+                    .append("<td><span class=\"badge severity-").append(finding.severity().name().toLowerCase()).append("\">")
+                    .append(escape(finding.severity().name())).append("</span></td>")
+                    .append("<td>").append(escape(finding.summary())).append("</td>")
+                    .append("<td>").append(escape(finding.evidence())).append("</td></tr>");
+        }
+
+        table.append("</tbody></table>");
+
+        return table.toString();
+    }
+
+    /** Looks a Node up by the raw StateSignature renderGraph already keys everything by, via the State it belongs to. */
+    private Optional<Node> nodeForSignature(KnowledgeBase knowledgeBase, String stateSignature) {
+
+        Optional<State> state = knowledgeBase.get(StateCatalog.class)
+                .flatMap(catalog -> catalog.states().stream()
+                        .filter(s -> s.stateSignature().equals(stateSignature))
+                        .findFirst());
+
+        return state.flatMap(s -> knowledgeBase.get(NodeCatalog.class).flatMap(nc -> nc.byStateId(s.id())));
     }
 
     private double nodeRadius(long visits) {
@@ -476,19 +695,27 @@ public class HtmlExplainabilityReportGenerator {
         return new double[][]{{from[0], from[1]}, {midX, midY}, {to[0], to[1]}};
     }
 
-    private String renderNode(String state, double[] pos, double radius, long visits, int index) {
+    private String renderNode(KnowledgeBase knowledgeBase, String state, double[] pos, double radius, long visits, int index) {
 
         double heatOpacity = nodeHeatOpacity(visits);
+
+        // Knowledge Enrichment Layer: the tooltip leads with the node's
+        // real name when one exists — the raw state signature (url +
+        // element fingerprint) stays available right after it for anyone
+        // who needs the underlying detail, same info the tooltip always
+        // showed, just no longer the only thing shown.
+        String displayName = nodeForSignature(knowledgeBase, state).map(Node::displayName).orElse(null);
+        String titlePrefix = displayName != null ? displayName + " (S" + index + ") — " : "S" + index + " — ";
 
         return String.format(
                 "<g class=\"node\" data-state=\"%s\">"
                         + "<circle cx=\"%.1f\" cy=\"%.1f\" r=\"%.1f\" "
                         + "style=\"fill: var(--accent); fill-opacity: %.2f\"/>"
                         + "<text x=\"%.1f\" y=\"%.1f\">S%d</text>"
-                        + "<title>%s (visited %d time%s)</title>"
+                        + "<title>%s%s (visited %d time%s)</title>"
                         + "</g>",
                 escapeAttr(state), pos[0], pos[1], radius, heatOpacity,
-                pos[0], pos[1] + 5, index, escape(state), visits, visits == 1 ? "" : "s"
+                pos[0], pos[1] + 5, index, escape(titlePrefix), escape(state), visits, visits == 1 ? "" : "s"
         );
     }
 
@@ -813,6 +1040,17 @@ public class HtmlExplainabilityReportGenerator {
                 .badge { padding: .25rem .75rem; border-radius: 999px; font-weight: 600; font-size: .85rem; color: #fff; }
                 .badge.success { background: var(--success); }
                 .badge.failure { background: var(--failure); }
+                .badge.severity-low { background: var(--low); }
+                .badge.severity-medium { background: var(--medium); }
+                .badge.severity-high { background: var(--high); }
+                .badge.severity-critical { background: var(--critical); }
+                .name-source { font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .03em;
+                    padding: .1rem .5rem; border-radius: 999px; }
+                .name-source.configured { background: color-mix(in srgb, var(--success) 20%, transparent); color: var(--success); }
+                .name-source.auto_title, .name-source.auto_url { background: var(--card); color: var(--muted); border: 1px solid var(--border); }
+                .flow-list { list-style: none; padding: 0; margin: 0 0 .75rem; font-size: .88rem; }
+                .flow-list li { padding: .3rem 0; border-bottom: 1px solid var(--border); }
+                .flow-list li:last-child { border-bottom: none; }
                 section { margin-bottom: 2rem; }
                 .summary { background: var(--card); border: 1px solid var(--border); border-radius: .5rem;
                     padding: 1rem 1.25rem; }
@@ -823,6 +1061,12 @@ public class HtmlExplainabilityReportGenerator {
                 .recommendation-label { font-size: .75rem; font-weight: 700; text-transform: uppercase;
                     color: var(--accent); letter-spacing: .04em; margin-bottom: .3rem; }
                 .recommendation-text { font-size: .95rem; }
+                .plain-summary-callout { background: color-mix(in srgb, var(--accent) 16%, var(--card));
+                    border: 1px solid var(--accent); border-left: 5px solid var(--accent);
+                    border-radius: .5rem; padding: 1.1rem 1.4rem; }
+                .plain-summary-label { font-size: .75rem; font-weight: 700; text-transform: uppercase;
+                    color: var(--accent); letter-spacing: .04em; margin-bottom: .4rem; }
+                .plain-summary-text { font-size: 1.05rem; line-height: 1.5; margin: 0; }
                 .stats { display: flex; flex-wrap: wrap; gap: .75rem; }
                 .tile { background: var(--card); border: 1px solid var(--border); border-radius: .5rem;
                     padding: .75rem 1rem; min-width: 120px; }
