@@ -52,7 +52,7 @@ Executor ──▶ Browser
 
 **ExecutionMemory / WorldModel** — in-run memory of what's been tried from which state and what it led to; this is what lets `KnownDeadEndCandidateFilter` prune a candidate whose every known destination is already visited, and what `CoverageAwareActionScorer` rewards a candidate for *not* being one of those.
 
-**Browser** — the only component that ever touches Playwright directly (`page.click()`, `.fill()`, `.navigate()`, ...). Every other component, and every plugin, is one layer removed from the real browser — see "Why This Architecture?" below for why that boundary is deliberate and enforced.
+**Browser** — the only component that ever touches Playwright directly (`page.click()`, `.fill()`, `.navigate()`, ...). Every other component, and every plugin, is one layer removed from the real browser — see "Why This Architecture?" below for why that boundary is deliberate and enforced. `PlaywrightBrowser` traverses every `<iframe>` on the page (via a `frame:N>`-prefixed locator scheme, invisible to every other component) as well as the top-level document, and its `page.locator(...)`-based element discovery incidentally pierces *open* Shadow DOM roots too, since that's Playwright's own CSS engine default. **Closed shadow roots stay permanently invisible** — that's a real browser security boundary, not an AEGIS limitation, and no browser automation tool (Playwright, Selenium, or otherwise) can see through it from outside. iframe support does not extend into shadow roots, or vice versa — they're separate boundaries, handled (or not) independently.
 
 ## Runtime Flow
 
@@ -126,6 +126,40 @@ Every other catalog is post-hoc — built entirely from what's already recorded 
 `InspectionConfig` is a `knowledge.yml` sibling of `nodes:`/`flows:`/`journeys:` (same file, same loader, a different kind of declaration — operational tuning, not business meaning). Everything defaults to a safe, low-noise posture; broken-link probing in particular is off by default, runs only after the mission completes, and never during exploration.
 
 See `API_REFERENCE.md` for exact signatures and `USAGE.md` for a worked `knowledge.yml` example.
+
+## Web UI (`aegis-web`)
+
+A thin presentation layer, not a new reasoning path — every mission it submits
+flows through the exact same `aegis-api`/`Launcher` entry point a CLI or
+hand-written `Main` class would use, on the JDK's built-in
+`com.sun.net.httpserver.HttpServer` (no framework dependency), rendering
+plain server-side HTML with inline CSS and no JavaScript anywhere except one
+small, narrowly-scoped script for the parsing-progress overlay described
+below.
+
+- **`MissionJobStore`/`MissionJob`/`MissionExecutor`** — an in-memory,
+  in-process job registry: submitting a mission from the browser hands it to
+  a background executor and returns immediately, so the request thread never
+  blocks on a multi-second/multi-minute mission run; `MissionJob` tracks
+  status (`RUNNING`/`DONE`/`ERROR`) for the dashboard and status pages to
+  poll via page reloads. Not persisted — restarting the process forgets
+  every prior job, same in-run-only scoping discipline as `ExecutionMemory`
+  (see Memory Scope below).
+- **`DashboardHandler`/`DashboardView`/`DashboardStats`** (`GET /`) — the
+  landing page: stat tiles (total runs, pass rate, average duration, active
+  count) computed by the pure `DashboardStats.compute(...)`, and a list of
+  every submitted job linking to its own status page.
+- **`RunHandler`/`MissionFormView`/`MissionRequestMapper`** (`GET`/`POST
+  /run`) — the structured mission form and its validate-then-submit path.
+- **`NaturalLanguageHandler`** (`POST /run/parse`) — the one place this
+  module calls back into `aegis-core` directly: builds a `LlmMissionParser`
+  over `OpenAiCompatibleChatClient.fromEnvironment()` and re-renders the
+  structured form pre-filled from its output, so a user reviews and can edit
+  every inferred field before anything actually runs — parsing is always a
+  review step, never a direct trigger to execute.
+- **`MissionsHandler`/`MissionStatusView`** (`GET /missions/{id}`) — a single
+  job's live status and, once finished, a reasoning-step timeline reconstructed
+  from the mission's own advisory `MissionPlan`.
 
 ## Memory Scope
 

@@ -61,4 +61,26 @@ class LocatorHealerTest {
 
         assertTrue(LocatorHealer.candidatesFor("[id='']").isEmpty());
     }
+
+    @Test
+    void healsAFrameQualifiedIdLocatorAndReattachesTheFramePrefixToEachCandidate() {
+
+        List<String> candidates = LocatorHealer.candidatesFor("frame:1>[id='submit']");
+
+        assertEquals(List.of("frame:1>[id*='submit']", "frame:1>:nth-match([id*='submit'], 1)"), candidates);
+    }
+
+    @Test
+    void healsAFrameQualifiedNthMatchLocatorAndReattachesTheFramePrefix() {
+
+        List<String> candidates = LocatorHealer.candidatesFor("frame:2>:nth-match(button, 3)");
+
+        assertEquals(List.of("frame:2>:nth-match(button, 2)", "frame:2>:nth-match(button, 4)"), candidates);
+    }
+
+    @Test
+    void returnsNoCandidatesForAFrameQualifiedLocatorOfAnUnrecognizedShape() {
+
+        assertTrue(LocatorHealer.candidatesFor("frame:1>text=Sign in").isEmpty());
+    }
 }

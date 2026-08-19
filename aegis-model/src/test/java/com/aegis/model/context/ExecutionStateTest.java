@@ -74,7 +74,7 @@ class ExecutionStateTest {
     void addReasoningStepAppends() {
 
         ExecutionState state = new ExecutionState();
-        ReasoningStep step = new ReasoningStep(1, List.<CandidateAction>of(), null, Instant.now());
+        ReasoningStep step = new ReasoningStep(1, List.<CandidateAction>of(), null, Instant.now(), "greedy");
 
         state.addReasoningStep(step);
 
@@ -108,7 +108,7 @@ class ExecutionStateTest {
         assertThrows(UnsupportedOperationException.class,
                 () -> state.getFindings().add(new Finding(FindingSeverity.LOW, "x", "x", Instant.now())));
         assertThrows(UnsupportedOperationException.class,
-                () -> state.getReasoningSteps().add(new ReasoningStep(1, List.of(), null, Instant.now())));
+                () -> state.getReasoningSteps().add(new ReasoningStep(1, List.of(), null, Instant.now(), "greedy")));
     }
 
     @Test

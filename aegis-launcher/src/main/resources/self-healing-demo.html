@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+<head><title>Self-Healing Demo Target</title></head>
+<body>
+  <!--
+    SelfHealingDemoMain generates the locator [id='login-button'] against
+    an earlier, unmutated version of this page, then this id is renamed
+    before the click is actually executed -- simulating a framework that
+    appends/rotates a generated suffix onto an otherwise-stable id between
+    one observation and the next (LocatorHealer's own javadoc names this as
+    the real-world cause it exists to cover).
+  -->
+  <button id="login-button-v2" onclick="document.title='HEALED-OK'">Login</button>
+</body>
+</html>

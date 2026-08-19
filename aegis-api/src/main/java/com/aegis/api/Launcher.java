@@ -6,11 +6,7 @@ import com.aegis.core.browser.BrowserConfig;
 import com.aegis.model.mission.Mission;
 import com.aegis.model.mission.MissionStatus;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Instant;
 import java.util.Map;
 
 /**
@@ -64,44 +60,24 @@ public final class Launcher {
         report.plan().steps().forEach(step -> System.out.println("  - " + step));
         System.out.println();
 
-        long timestamp = Instant.now().toEpochMilli();
-
-        Path textReportPath = writeReport(report.textReport(), timestamp, "txt", reportsDirectory);
-        Path htmlReportPath = writeReport(report.htmlReport(), timestamp, "html", reportsDirectory);
-        Path jsonReportPath = writeReport(report.jsonReport(), timestamp, "json", reportsDirectory);
+        ReportWriter.WrittenReportPaths paths = ReportWriter.writeAll(report, reportsDirectory);
 
         System.out.println();
         System.out.println("=================================");
         System.out.println("Mission Finished");
         System.out.println("Status     : " + report.status());
-        System.out.println("Report     : " + textReportPath);
-        System.out.println("HTML Report: " + htmlReportPath);
-        System.out.println("JSON Report: " + jsonReportPath);
+        System.out.println("Report     : " + paths.text());
+        System.out.println("HTML Report: " + paths.html());
+        System.out.println("JSON Report: " + paths.json());
 
         // Stage 2 "Report Plugin" — one extra file per discovered
         // ReportRenderer, named after it (e.g. aegis-report-<ts>.markdown).
-        for (Map.Entry<String, String> pluginReport : report.pluginReports().entrySet()) {
-            Path path = writeReport(pluginReport.getValue(), timestamp, pluginReport.getKey(), reportsDirectory);
-            System.out.println(pluginReport.getKey() + " Report: " + path);
+        for (Map.Entry<String, Path> pluginReport : paths.pluginReports().entrySet()) {
+            System.out.println(pluginReport.getKey() + " Report: " + pluginReport.getValue());
         }
 
         System.out.println("=================================");
 
         return report.status();
-    }
-
-    private static Path writeReport(String content, long timestamp, String extension, String reportsDirectory) {
-
-        Path directory = Path.of(reportsDirectory);
-        Path path = directory.resolve("aegis-report-" + timestamp + "." + extension);
-
-        try {
-            Files.createDirectories(directory);
-            Files.writeString(path, content);
-        } catch (IOException e) {
-            throw new UncheckedIOException("Failed to write " + extension + " report", e);
-        }
-
-        return path;
     }
 }

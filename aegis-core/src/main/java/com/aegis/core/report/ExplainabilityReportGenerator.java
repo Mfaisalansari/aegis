@@ -385,12 +385,16 @@ public class ExplainabilityReportGenerator {
                     : String.format("%.2f ahead of the next-best of %d alternatives", margin, step.candidates().size() - 1);
 
             String learnedTag = step.selected().reasoning().contains("learning-adjusted") ? " [learned]" : "";
+            String value = step.selected().action().value();
+            String valueTag = value != null && !value.isBlank() ? " value=" + value : "";
 
             report.append(String.format(
-                    "  Step %d: %s %s (confidence=%.2f, %s)%s — %s%n",
+                    "  Step %d [%s]: %s %s%s (confidence=%.2f, %s)%s — %s%n",
                     step.step(),
+                    step.strategy(),
                     step.selected().action().type(),
                     step.selected().action().target(),
+                    valueTag,
                     step.selected().confidence(),
                     marginText,
                     learnedTag,

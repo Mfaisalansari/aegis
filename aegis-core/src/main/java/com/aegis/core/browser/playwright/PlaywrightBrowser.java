@@ -10,6 +10,7 @@ import com.aegis.model.finding.FindingSeverity;
 import com.aegis.model.observation.AnomalySignal;
 import com.aegis.model.observation.ElementInfo;
 import com.microsoft.playwright.BrowserType;
+import com.microsoft.playwright.Frame;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
@@ -26,10 +27,22 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class PlaywrightBrowser implements Browser {
 
     private static final Logger log = LoggerFactory.getLogger(PlaywrightBrowser.class);
+
+    /**
+     * iframe support: a locator discovered inside an actual {@code <iframe>}
+     * (not the top-level document) is prefixed with the index of its frame
+     * in {@code page.frames()} — which already lists the main frame at
+     * index 0, so main-frame locators need no special case, only no prefix.
+     * Every existing locator this class ever produced stays exactly as-is
+     * (unprefixed) — this only activates for genuinely framed elements.
+     */
+    private static final Pattern FRAME_PREFIX = Pattern.compile("^frame:(\\d+)>(.*)$", Pattern.DOTALL);
 
     private final List<AnomalySignal> anomalies = new CopyOnWriteArrayList<>();
     private final BrowserConfig config;
@@ -245,7 +258,7 @@ public class PlaywrightBrowser implements Browser {
 
         try {
 
-            Locator locator = page.locator(locatorString);
+            Locator locator = resolveLocator(locatorString);
 
             com.microsoft.playwright.options.BoundingBox playwrightBox = locator.boundingBox();
             BoundingBox box = playwrightBox == null
@@ -396,54 +409,54 @@ public class PlaywrightBrowser implements Browser {
 
     @Override
     public void click(String locator) {
-        page.locator(locator).click();
+        resolveLocator(locator).click();
         settle();
     }
 
     @Override
     public void click(String locator, Duration timeout) {
-        page.locator(locator).click(new Locator.ClickOptions().setTimeout(timeout.toMillis()));
+        resolveLocator(locator).click(new Locator.ClickOptions().setTimeout(timeout.toMillis()));
         settle();
     }
 
     @Override
     public void doubleClick(String locator) {
-        page.locator(locator).dblclick();
+        resolveLocator(locator).dblclick();
         settle();
     }
 
     @Override
     public void doubleClick(String locator, Duration timeout) {
-        page.locator(locator).dblclick(new Locator.DblclickOptions().setTimeout(timeout.toMillis()));
+        resolveLocator(locator).dblclick(new Locator.DblclickOptions().setTimeout(timeout.toMillis()));
         settle();
     }
 
     @Override
     public void raceClick(String locator) {
-        page.locator(locator).evaluate("el => { el.click(); el.click(); }");
+        resolveLocator(locator).evaluate("el => { el.click(); el.click(); }");
         settle();
     }
 
     @Override
     public void type(String locator, String text) {
-        page.locator(locator).fill(text);
+        resolveLocator(locator).fill(text);
         settle();
     }
 
     @Override
     public void type(String locator, String text, Duration timeout) {
-        page.locator(locator).fill(text, new Locator.FillOptions().setTimeout(timeout.toMillis()));
+        resolveLocator(locator).fill(text, new Locator.FillOptions().setTimeout(timeout.toMillis()));
         settle();
     }
 
     @Override
     public void select(String locator) {
-        select(page.locator(locator), new Locator.SelectOptionOptions());
+        select(resolveLocator(locator), new Locator.SelectOptionOptions());
     }
 
     @Override
     public void select(String locator, Duration timeout) {
-        select(page.locator(locator), new Locator.SelectOptionOptions().setTimeout(timeout.toMillis()));
+        select(resolveLocator(locator), new Locator.SelectOptionOptions().setTimeout(timeout.toMillis()));
     }
 
     private void select(Locator select, Locator.SelectOptionOptions options) {
@@ -462,12 +475,12 @@ public class PlaywrightBrowser implements Browser {
 
     @Override
     public void scrollTo(String locator) {
-        page.locator(locator).scrollIntoViewIfNeeded();
+        resolveLocator(locator).scrollIntoViewIfNeeded();
     }
 
     @Override
     public void scrollTo(String locator, Duration timeout) {
-        page.locator(locator)
+        resolveLocator(locator)
                 .scrollIntoViewIfNeeded(new Locator.ScrollIntoViewIfNeededOptions().setTimeout(timeout.toMillis()));
     }
 
@@ -500,35 +513,49 @@ public class PlaywrightBrowser implements Browser {
         return page.url();
     }
 
+    /**
+     * iframe support: every discovery method loops {@code page.frames()}
+     * rather than querying the top-level page alone — index 0 in that list
+     * already *is* the main frame, so no separate top-level pass is needed.
+     * Elements found in the main frame produce exactly the locators this
+     * class always produced; elements found inside an actual {@code
+     * <iframe>} get a {@code frame:N>} prefix via {@link
+     * #buildBestLocator(int, String, String, String, int)} so {@link
+     * #resolveLocator} can find them again later.
+     */
     @Override
     public List<ElementInfo> getButtons() {
 
         List<ElementInfo> buttons = new ArrayList<>();
+        List<Frame> frames = page.frames();
 
-        Locator locator = page.locator("button");
+        for (int frameIndex = 0; frameIndex < frames.size(); frameIndex++) {
 
-        for (int i = 0; i < locator.count(); i++) {
+            Locator locator = frames.get(frameIndex).locator("button");
 
-            Locator button = locator.nth(i);
+            for (int i = 0; i < locator.count(); i++) {
 
-            String id = safe(button.getAttribute("id"));
-            String name = safe(button.getAttribute("name"));
-            String text = safe(button.textContent()).trim();
-            String type = safe(button.getAttribute("type"));
+                Locator button = locator.nth(i);
 
-            String bestLocator = buildBestLocator("button", id, name, i);
+                String id = safe(button.getAttribute("id"));
+                String name = safe(button.getAttribute("name"));
+                String text = safe(button.textContent()).trim();
+                String type = normalizeButtonType(button.getAttribute("type"));
 
-            buttons.add(new ElementInfo(
-                    "button",
-                    id,
-                    name,
-                    text,
-                    type,
-                    "",
-                    button.isVisible(),
-                    button.isEnabled(),
-                    bestLocator
-            ));
+                String bestLocator = buildBestLocator(frameIndex, "button", id, name, i);
+
+                buttons.add(new ElementInfo(
+                        "button",
+                        id,
+                        name,
+                        text,
+                        type,
+                        "",
+                        button.isVisible(),
+                        button.isEnabled(),
+                        bestLocator
+                ));
+            }
         }
 
         return buttons;
@@ -538,31 +565,34 @@ public class PlaywrightBrowser implements Browser {
     public List<ElementInfo> getInputs() {
 
         List<ElementInfo> inputs = new ArrayList<>();
+        List<Frame> frames = page.frames();
 
-        Locator locator = page.locator("input");
+        for (int frameIndex = 0; frameIndex < frames.size(); frameIndex++) {
 
-        for (int i = 0; i < locator.count(); i++) {
+            Locator locator = frames.get(frameIndex).locator("input");
 
-            Locator input = locator.nth(i);
+            for (int i = 0; i < locator.count(); i++) {
 
-            String id = safe(input.getAttribute("id"));
-            String name = safe(input.getAttribute("name"));
-            String value = safe(input.getAttribute("value"));
-            String type = normalizeInputType(input.getAttribute("type"));
+                Locator input = locator.nth(i);
 
-            String bestLocator = buildBestLocator("input", id, name, i);
+                String id = safe(input.getAttribute("id"));
+                String name = safe(input.getAttribute("name"));
+                String type = normalizeInputType(input.getAttribute("type"));
 
-            inputs.add(new ElementInfo(
-                    "input",
-                    id,
-                    name,
-                    "",
-                    type,
-                    safe(input.inputValue()),
-                    input.isVisible(),
-                    input.isEnabled(),
-                    bestLocator
-            ));
+                String bestLocator = buildBestLocator(frameIndex, "input", id, name, i);
+
+                inputs.add(new ElementInfo(
+                        "input",
+                        id,
+                        name,
+                        "",
+                        type,
+                        safe(input.inputValue()),
+                        input.isVisible(),
+                        input.isEnabled(),
+                        bestLocator
+                ));
+            }
         }
 
         return inputs;
@@ -572,30 +602,34 @@ public class PlaywrightBrowser implements Browser {
     public List<ElementInfo> getLinks() {
 
         List<ElementInfo> links = new ArrayList<>();
+        List<Frame> frames = page.frames();
 
-        Locator locator = page.locator("a");
+        for (int frameIndex = 0; frameIndex < frames.size(); frameIndex++) {
 
-        for (int i = 0; i < locator.count(); i++) {
+            Locator locator = frames.get(frameIndex).locator("a");
 
-            Locator link = locator.nth(i);
+            for (int i = 0; i < locator.count(); i++) {
 
-            String id = safe(link.getAttribute("id"));
-            String name = safe(link.getAttribute("name"));
-            String text = safe(link.textContent()).trim();
+                Locator link = locator.nth(i);
 
-            String bestLocator = buildBestLocator("a", id, name, i);
+                String id = safe(link.getAttribute("id"));
+                String name = safe(link.getAttribute("name"));
+                String text = safe(link.textContent()).trim();
 
-            links.add(new ElementInfo(
-                    "a",
-                    id,
-                    name,
-                    text,
-                    "link",
-                    "",
-                    link.isVisible(),
-                    link.isEnabled(),
-                    bestLocator
-            ));
+                String bestLocator = buildBestLocator(frameIndex, "a", id, name, i);
+
+                links.add(new ElementInfo(
+                        "a",
+                        id,
+                        name,
+                        text,
+                        "link",
+                        "",
+                        link.isVisible(),
+                        link.isEnabled(),
+                        bestLocator
+                ));
+            }
         }
 
         return links;
@@ -605,32 +639,66 @@ public class PlaywrightBrowser implements Browser {
     public List<ElementInfo> getSelects() {
 
         List<ElementInfo> selects = new ArrayList<>();
+        List<Frame> frames = page.frames();
 
-        Locator locator = page.locator("select");
+        for (int frameIndex = 0; frameIndex < frames.size(); frameIndex++) {
 
-        for (int i = 0; i < locator.count(); i++) {
+            Locator locator = frames.get(frameIndex).locator("select");
 
-            Locator select = locator.nth(i);
+            for (int i = 0; i < locator.count(); i++) {
 
-            String id = safe(select.getAttribute("id"));
-            String name = safe(select.getAttribute("name"));
+                Locator select = locator.nth(i);
 
-            String bestLocator = buildBestLocator("select", id, name, i);
+                String id = safe(select.getAttribute("id"));
+                String name = safe(select.getAttribute("name"));
 
-            selects.add(new ElementInfo(
-                    "select",
-                    id,
-                    name,
-                    "",
-                    "select",
-                    "",
-                    select.isVisible(),
-                    select.isEnabled(),
-                    bestLocator
-            ));
+                String bestLocator = buildBestLocator(frameIndex, "select", id, name, i);
+
+                selects.add(new ElementInfo(
+                        "select",
+                        id,
+                        name,
+                        "",
+                        "select",
+                        "",
+                        select.isVisible(),
+                        select.isEnabled(),
+                        bestLocator
+                ));
+            }
         }
 
         return selects;
+    }
+
+    /**
+     * The single chokepoint every locator-consuming method routes through.
+     * A plain locator (no prefix) resolves against the top-level page,
+     * exactly as before. A {@code frame:N>...} locator (see {@link
+     * #FRAME_PREFIX}) resolves against that frame instead — thrown as an
+     * {@link IllegalStateException} (a {@code RuntimeException}) when frame
+     * N no longer exists, deliberately: {@code SelfHealingBrowser} already
+     * retries/heals on any {@code RuntimeException}, so a frame that's gone
+     * stale between observation and action gets the same treatment a
+     * disappeared element already gets today, with no changes needed there.
+     */
+    private Locator resolveLocator(String raw) {
+
+        Matcher framePrefix = FRAME_PREFIX.matcher(raw);
+
+        if (!framePrefix.matches()) {
+            return page.locator(raw);
+        }
+
+        List<Frame> frames = page.frames();
+        int frameIndex = Integer.parseInt(framePrefix.group(1));
+
+        if (frameIndex >= frames.size()) {
+            throw new IllegalStateException(
+                    "Frame " + frameIndex + " no longer exists (page currently has " + frames.size() + " frame(s))");
+        }
+
+        return frames.get(frameIndex).locator(framePrefix.group(2));
     }
 
     /**
@@ -658,31 +726,44 @@ public class PlaywrightBrowser implements Browser {
      * strict-mode crash on a page with 61 links spread across many
      * different parent containers.
      */
-    private String buildBestLocator(String tag, String id, String name, int index) {
+    /**
+     * Frame-aware overload: {@code frameIndex} is the same index {@code
+     * page.frames()} uses (0 = main frame). The uniqueness probe ({@link
+     * #matchesExactlyOne}) must run against that same frame's own document
+     * — an id unique within an iframe's document could coincidentally
+     * collide with one elsewhere on the page, and vice versa, since each
+     * frame is a genuinely separate document. The returned locator only
+     * gets the {@code frame:N>} prefix when {@code frameIndex != 0}, so
+     * every main-frame locator stays byte-for-byte identical to what this
+     * method always produced.
+     */
+    private String buildBestLocator(int frameIndex, String tag, String id, String name, int index) {
+
+        String prefix = frameIndex == 0 ? "" : "frame:" + frameIndex + ">";
 
         if (!id.isBlank()) {
             String idLocator = "[id='" + escapeAttributeValue(id) + "']";
-            if (matchesExactlyOne(idLocator)) {
-                return idLocator;
+            if (matchesExactlyOne(frameIndex, idLocator)) {
+                return prefix + idLocator;
             }
         }
 
         if (!name.isBlank()) {
             String nameLocator = "[name='" + escapeAttributeValue(name) + "']";
-            if (matchesExactlyOne(nameLocator)) {
-                return nameLocator;
+            if (matchesExactlyOne(frameIndex, nameLocator)) {
+                return prefix + nameLocator;
             }
         }
 
-        return ":nth-match(" + tag + ", " + (index + 1) + ")";
+        return prefix + ":nth-match(" + tag + ", " + (index + 1) + ")";
     }
 
     private String escapeAttributeValue(String value) {
         return value.replace("\\", "\\\\").replace("'", "\\'");
     }
 
-    private boolean matchesExactlyOne(String locator) {
-        return page.locator(locator).count() == 1;
+    private boolean matchesExactlyOne(int frameIndex, String locator) {
+        return page.frames().get(frameIndex).locator(locator).count() == 1;
     }
 
     /**
@@ -706,5 +787,21 @@ public class PlaywrightBrowser implements Browser {
      */
     private String normalizeInputType(String type) {
         return (type == null || type.isBlank()) ? "text" : type;
+    }
+
+    /**
+     * Same gap as {@link #normalizeInputType}, for {@code <button>}: no
+     * {@code type} attribute at all is real, valid, common HTML (found
+     * live while verifying iframe support — a bare {@code <button
+     * onclick="...">} with no {@code type=} generated zero candidates,
+     * since {@code DefaultElementActionMapper} only recognizes the literal
+     * strings "BUTTON"/"SUBMIT"). Defaults to "button", not "submit" —
+     * this label only needs to make the mapper recognize the element as
+     * clickable, and every {@code <button>} tag is clickable regardless of
+     * its type, so it doesn't need the form-submission-specific default a
+     * real browser would apply.
+     */
+    private String normalizeButtonType(String type) {
+        return (type == null || type.isBlank()) ? "button" : type;
     }
 }

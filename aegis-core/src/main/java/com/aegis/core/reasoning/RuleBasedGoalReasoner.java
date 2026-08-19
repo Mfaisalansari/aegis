@@ -40,6 +40,7 @@ public class RuleBasedGoalReasoner implements GoalReasoner {
 
         candidates = filter.filter(context, candidates);
 
+        String strategyKey = scorerRegistry.resolveKey(context);
         ActionScorer scorer = scorerRegistry.resolve(context);
 
         CandidateAction best = scorer.choose(context, candidates);
@@ -51,7 +52,8 @@ public class RuleBasedGoalReasoner implements GoalReasoner {
                                 .size() + 1,
                         candidates,
                         best,
-                        Instant.now()
+                        Instant.now(),
+                        strategyKey
                 )
         );
 

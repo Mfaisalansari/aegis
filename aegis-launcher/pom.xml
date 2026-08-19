@@ -30,4 +30,24 @@
             <version>${project.version}</version>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.5.0</version>
+                <configuration>
+                    <!--
+                        Default to the simplest demo (a plain login, no AI/knowledge
+                        features) so a bare `mvn -pl aegis-launcher exec:java` does
+                        something sensible. Every other entry point in this module is
+                        run the same way with an explicit override, e.g.:
+                          mvn -pl aegis-launcher exec:java -Dexec.mainClass=com.aegis.launcher.LlmSauceDemoMain
+                    -->
+                    <mainClass>com.aegis.launcher.SauceDemoMain</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>

@@ -2,6 +2,7 @@ package com.aegis.core.report;
 
 import com.aegis.core.bug.BugCluster;
 import com.aegis.core.bug.BugExplainer;
+import com.aegis.core.bug.BugFingerprint;
 import com.aegis.core.bug.RecommendationEngine;
 import com.aegis.core.bug.RuleBasedBugExplainer;
 import com.aegis.core.bug.RuleBasedRecommendationEngine;
@@ -37,11 +38,17 @@ import com.aegis.model.context.MissionContext;
 import java.time.Duration;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -128,20 +135,15 @@ public class HtmlExplainabilityReportGenerator {
         html.append("</head><body>");
 
         html.append(renderHeader(data));
-        html.append(renderPlainLanguageSummary(data));
-        html.append(renderTableOfContents());
-        html.append(renderSummary(data));
-        html.append(renderRecommendation(data));
-        html.append(renderStats(data));
-        html.append(renderTimeline(data));
-        html.append(renderPlan(data));
-        html.append(renderGraph(data));
-        html.append(renderPageCoverage(data));
-        html.append(renderLearning(data));
-        html.append(renderFindingsDashboard(data));
-        html.append(renderBugClusters(data));
-        html.append(renderFindings(data));
-        html.append(renderSteps(data));
+        html.append(renderTabs());
+
+        html.append("<main>");
+        html.append(tabPanel("overview", true, renderOverviewTab(data)));
+        html.append(tabPanel("findings", false, renderFindingsTab(data)));
+        html.append(tabPanel("reasoning", false, renderReasoningTab(data)));
+        html.append(tabPanel("timeline", false, renderTimeline(data)));
+        html.append(tabPanel("world-model", false, renderWorldModelTab(data)));
+        html.append("</main>");
 
         html.append("<script>").append(js()).append("</script>");
         html.append("</body></html>");
@@ -172,31 +174,66 @@ public class HtmlExplainabilityReportGenerator {
 
         return "<header>"
                 + "<h1>" + escape(data.missionName()) + "</h1>"
-                + "<span class=\"badge " + statusClass + "\">" + data.status() + "</span>"
+                + "<span class=\"badge " + statusClass + "\" title=\"" + escape(data.status().name()) + "\">"
+                + escape(PlainLanguageGlossary.missionStatusLabel(data.status())) + "</span>"
                 + "</header>";
     }
 
     /**
-     * Reporting v2 Stage 3 "interactive HTML": the report has grown to a
-     * dozen-plus sections — a sticky jump nav so a reader can go straight
-     * to the one they want instead of scrolling past everything else.
+     * Simplified interactive report: 5 tabs instead of a dozen-plus
+     * always-expanded sections — Overview is what a reader lands on;
+     * everything else is a click away, not a scroll. Replaces the old
+     * sticky jump-nav ({@code renderTableOfContents}).
      */
-    private String renderTableOfContents() {
+    private String renderTabs() {
 
-        return "<nav class=\"toc\">"
-                + "<a href=\"#plain-summary\">In Plain English</a>"
-                + "<a href=\"#summary\">Summary</a>"
-                + "<a href=\"#recommendation\">Recommendation</a>"
-                + "<a href=\"#stats\">Statistics</a>"
-                + "<a href=\"#timeline\">Timeline</a>"
-                + "<a href=\"#plan\">Plan</a>"
-                + "<a href=\"#world-model\">World Model</a>"
-                + "<a href=\"#coverage\">Coverage</a>"
-                + "<a href=\"#learning\">Learning</a>"
-                + "<a href=\"#findings-dashboard\">Findings</a>"
-                + "<a href=\"#bug-clusters\">Bug Clusters</a>"
-                + "<a href=\"#reasoning-steps\">Reasoning</a>"
-                + "</nav>";
+        StringBuilder nav = new StringBuilder("<nav class=\"tabs\" role=\"tablist\">");
+
+        nav.append(tabButton("overview", "Overview", true));
+        nav.append(tabButton("findings", "Findings", false));
+        nav.append(tabButton("reasoning", "Reasoning &amp; Learning", false));
+        nav.append(tabButton("timeline", "Timeline", false));
+        nav.append(tabButton("world-model", "World Model", false));
+
+        nav.append("</nav>");
+
+        return nav.toString();
+    }
+
+    private String tabButton(String tab, String label, boolean active) {
+        return "<button class=\"tab-btn" + (active ? " active" : "") + "\" data-tab=\"" + tab
+                + "\" role=\"tab\" aria-selected=\"" + active + "\">" + label + "</button>";
+    }
+
+    private String tabPanel(String tab, boolean active, String content) {
+        return "<section class=\"tab-panel" + (active ? " active" : "") + "\" data-tab-panel=\"" + tab
+                + "\" role=\"tabpanel\"" + (active ? "" : " style=\"display:none\"") + ">" + content + "</section>";
+    }
+
+    /** The "stop here if you're busy" tab — nothing here requires interpreting a graph or a table. */
+    private String renderOverviewTab(MissionReportData data) {
+        return renderPlainLanguageSummary(data)
+                + renderSummary(data)
+                + renderRecommendation(data)
+                + renderStats(data)
+                + renderPlan(data);
+    }
+
+    /** Everything with a severity badge lives here — bug clusters, UX Quality, and Page Inspection findings. */
+    private String renderFindingsTab(MissionReportData data) {
+        return renderBugClustersConsolidated(data)
+                + renderUxQuality(data.knowledgeBase())
+                + renderPageInspection(data.knowledgeBase());
+    }
+
+    /** Both are "how it decided, and got better" — aggregate learning stats paired with per-decision detail. */
+    private String renderReasoningTab(MissionReportData data) {
+        return renderLearning(data) + renderSteps(data);
+    }
+
+    /** "What was explored," distinct from "what was wrong" (Findings) or "how it decided" (Reasoning). */
+    private String renderWorldModelTab(MissionReportData data) {
+        return renderWorldModelGraph(data) + renderPageCoverage(data);
     }
 
     /**
@@ -365,79 +402,232 @@ public class HtmlExplainabilityReportGenerator {
                 + "<div class=\"tile-label\">" + escape(label) + "</div></div>";
     }
 
-    private String renderGraph(MissionReportData data) {
+    /**
+     * The World Model's two views, toggled by the same vanilla-JS idiom
+     * already used for the Findings tab's category/flat switch and the
+     * timeline filter — {@code Path} (default) is "the knowledge path":
+     * the real named screens this run actually visited, in order.
+     * {@code Graph} is the fuller technical map (branches, revisit heat,
+     * every transition) for anyone who wants it.
+     */
+    private String renderWorldModelGraph(MissionReportData data) {
 
         StringBuilder section = new StringBuilder("<section id=\"world-model\"><h2>World Model</h2>"
-                + "<p class=\"caption\">Node size/fill and edge thickness reflect how many times "
-                + "exploration passed through that state or transition (Phase 5 heat map).</p>");
+                + "<p class=\"caption\">The path AEGIS actually took through the app, by name — switch to "
+                + "Graph for the fuller technical map of every state and transition discovered.</p>");
 
-        List<String> states = data.states();
-
-        if (states.isEmpty()) {
+        if (data.states().isEmpty()) {
             section.append("<p class=\"empty\">No states observed.</p></section>");
             return section.toString();
         }
 
-        Map<String, double[]> positions = new LinkedHashMap<>();
-        double cx = 340;
-        double cy = 320;
-        double layoutRadius = Math.max(140, 34.0 * states.size());
+        section.append("<div class=\"graph-view-toggle timeline-filter\">"
+                + "<button data-view=\"path\" class=\"active\">Path</button>"
+                + "<button data-view=\"graph\">Graph</button>"
+                + "</div>");
 
-        for (int i = 0; i < states.size(); i++) {
-            double angle = 2 * Math.PI * i / states.size() - Math.PI / 2;
-            positions.put(states.get(i), new double[]{
-                    cx + layoutRadius * Math.cos(angle),
-                    cy + layoutRadius * Math.sin(angle)
-            });
+        section.append("<div class=\"graph-view\" data-graph-view=\"path\">")
+                .append(renderPathView(data)).append("</div>");
+        section.append("<div class=\"graph-view\" data-graph-view=\"graph\" style=\"display:none\">")
+                .append(renderGraphView(data)).append("</div>");
+
+        section.append(renderNodeDictionary(data.knowledgeBase()));
+        section.append(renderFlowsAndJourneys(data.knowledgeBase()));
+        section.append("</section>");
+
+        return section.toString();
+    }
+
+    /**
+     * The knowledge path: {@link Journey#actualNodeKeySequence()} — the
+     * real, revisit-collapsed order of named screens this run visited —
+     * rendered as a left-to-right stepper instead of a graph at all.
+     * Real display names are the primary label; raw detail (state
+     * signature, every action taken from that screen) is a click away per
+     * step, never shown by default.
+     */
+    private String renderPathView(MissionReportData data) {
+
+        KnowledgeBase knowledgeBase = data.knowledgeBase();
+        Optional<JourneyCatalog> journeyCatalog = knowledgeBase.get(JourneyCatalog.class);
+        List<Journey> observed = journeyCatalog.map(JourneyCatalog::observed).orElse(List.of());
+
+        if (observed.isEmpty()) {
+            return "<p class=\"empty\">No named path available for this run.</p>";
+        }
+
+        Journey journey = observed.get(0);
+
+        // Every declared journey this run's path actually matched, indexed
+        // by which node keys belong to it — a node can belong to more than
+        // one matched journey (e.g. a shared login screen), and a match is
+        // only a subsequence match (JourneyCatalogProvider.isSubsequence),
+        // not necessarily contiguous — so each step is tagged individually
+        // rather than drawing one bracket over a range, which would
+        // misrepresent runs where other steps fall in between.
+        Map<String, List<String>> matchedJourneyNamesByNodeKey = new LinkedHashMap<>();
+        for (String definitionKey : journey.matchedDefinitionKeys()) {
+            journeyCatalog.get().definitions().stream()
+                    .filter(definition -> definition.key().equals(definitionKey))
+                    .findFirst()
+                    .ifPresent(definition -> {
+                        for (String nodeKey : definition.nodeKeys()) {
+                            matchedJourneyNamesByNodeKey
+                                    .computeIfAbsent(nodeKey, key -> new ArrayList<>())
+                                    .add(definition.name());
+                        }
+                    });
+        }
+
+        List<String> sequence = journey.actualNodeKeySequence();
+        StringBuilder path = new StringBuilder("<div class=\"path-view\">");
+
+        for (int i = 0; i < sequence.size(); i++) {
+
+            String nodeKey = sequence.get(i);
+            Optional<Node> node = knowledgeBase.get(NodeCatalog.class).flatMap(catalog -> catalog.byKey(nodeKey));
+
+            if (node.isEmpty()) {
+                continue;
+            }
+
+            path.append(renderPathStep(data, node.get(), matchedJourneyNamesByNodeKey.get(nodeKey)));
+
+            if (i < sequence.size() - 1) {
+                path.append("<span class=\"path-arrow\">&#8594;</span>");
+            }
+        }
+
+        path.append("</div>");
+
+        return path.toString();
+    }
+
+    private String renderPathStep(MissionReportData data, Node node, List<String> matchedJourneyNames) {
+
+        String signature = signatureForNode(data.knowledgeBase(), node);
+        long visits = signature != null ? data.stateVisitCounts().getOrDefault(signature, 1L) : 1L;
+
+        List<NavigationEdge> actionsHere = signature != null
+                ? data.edges().stream().filter(edge -> edge.fromState().equals(signature)).toList()
+                : List.of();
+
+        StringBuilder step = new StringBuilder("<details class=\"path-step\"><summary>");
+        step.append("<span class=\"path-step-name\">").append(escape(node.displayName())).append("</span>");
+
+        if (visits > 1) {
+            step.append(" <span class=\"visit-badge\">×").append(visits).append("</span>");
+        }
+
+        if (matchedJourneyNames != null) {
+            for (String journeyName : matchedJourneyNames) {
+                step.append(" <span class=\"journey-tag\">&#10003; ").append(escape(journeyName)).append("</span>");
+            }
+        }
+
+        step.append("</summary>");
+        step.append("<div class=\"path-step-detail\">");
+
+        if (actionsHere.isEmpty()) {
+            step.append("<p class=\"empty\">No actions recorded from this screen.</p>");
+        } else {
+            step.append("<ul>");
+            for (NavigationEdge edge : actionsHere) {
+                step.append("<li>").append(escape(PlainLanguageGlossary.actionVerb(edge.actionType())
+                        + " " + shortenTarget(edge.actionTarget()))).append("</li>");
+            }
+            step.append("</ul>");
+        }
+
+        step.append("<p class=\"tech-id\">").append(escape(signature != null ? signature : "(no signature)")).append("</p>");
+        step.append("</div></details>");
+
+        return step.toString();
+    }
+
+    /**
+     * The fuller technical map — same node/edge/heat-map concept as
+     * before, three real fixes: a layered top-to-bottom layout (BFS depth
+     * from the first-visited state) instead of an arbitrary circle, real
+     * display names as the primary label instead of "S1", and self-loops
+     * collapsed into a small ×N badge (click/hover reveals the raw
+     * repeated actions via the node's tooltip) instead of an always-drawn
+     * curve — the self-loop curves were a direct contributor to the
+     * oversized/tall bounding box the earlier SVG-scaling fix only
+     * partially addressed. The observed knowledge-path (same sequence
+     * Path View renders) is highlighted in the accent color so the
+     * "golden path" is visible even alongside branches.
+     */
+    private String renderGraphView(MissionReportData data) {
+
+        List<String> states = data.states();
+        Map<String, Integer> depth = computeLayeredDepth(states, data.edges());
+
+        Map<Integer, List<String>> statesByLayer = new LinkedHashMap<>();
+        for (String state : states) {
+            statesByLayer.computeIfAbsent(depth.get(state), layer -> new ArrayList<>()).add(state);
+        }
+
+        double layerHeight = 130;
+        double nodeSpacing = 160;
+        double topMargin = 60;
+
+        Map<String, double[]> positions = new LinkedHashMap<>();
+        for (Map.Entry<Integer, List<String>> layer : statesByLayer.entrySet()) {
+
+            List<String> layerStates = layer.getValue();
+            double layerWidth = (layerStates.size() - 1) * nodeSpacing;
+            double startX = 340 - layerWidth / 2;
+
+            for (int i = 0; i < layerStates.size(); i++) {
+                positions.put(layerStates.get(i), new double[]{
+                        startX + i * nodeSpacing,
+                        topMargin + layer.getKey() * layerHeight
+                });
+            }
         }
 
         Map<String, Double> nodeRadii = new LinkedHashMap<>();
-
         for (String state : states) {
             nodeRadii.put(state, nodeRadius(data.stateVisitCounts().getOrDefault(state, 1L)));
         }
 
-        // Heat by exact transition (type + target, not just from/to): two
-        // different actions between the same pair of states get their own
-        // curve; the SAME action repeated multiple times collapses into
-        // one thicker line instead of several overlapping near-duplicate
-        // arcs, which is what "heat" should look like rather than clutter.
         Map<NavigationEdge, Long> edgeFrequency = data.edges().stream()
                 .collect(Collectors.groupingBy(edge -> edge, LinkedHashMap::new, Collectors.counting()));
 
+        Map<String, Long> selfLoopCountByState = new LinkedHashMap<>();
         Map<String, List<NavigationEdge>> grouped = new LinkedHashMap<>();
 
         for (NavigationEdge edge : edgeFrequency.keySet()) {
-            grouped.computeIfAbsent(edge.fromState() + " " + edge.toState(), key -> new ArrayList<>())
-                    .add(edge);
+            if (edge.fromState().equals(edge.toState())) {
+                selfLoopCountByState.merge(edge.fromState(), edgeFrequency.get(edge), Long::sum);
+            } else {
+                grouped.computeIfAbsent(edge.fromState() + " " + edge.toState(), key -> new ArrayList<>())
+                        .add(edge);
+            }
         }
 
-        StringBuilder edgesSvg = new StringBuilder();
+        Set<String> pathSignatures = journeyPathSignatures(data);
 
-        // A quadratic/cubic Bezier curve always stays within the convex hull
-        // of its own control points, so tracking every anchor/control/label
-        // point actually used to draw the graph gives an exact viewBox.
-        // The previous viewBox was a fixed guess (cy * 2 tall) that ignored
-        // how far the node radius grows with the state count, so once there
-        // were more than a handful of states the graph rendered far outside
-        // its own viewBox and looked clipped/distorted. Per-node radius
-        // (instead of a flat 26) now varies with visit count, so bounds
-        // must be measured against each node's actual radius too.
+        StringBuilder edgesSvg = new StringBuilder();
         double[] bounds = {Double.MAX_VALUE, Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE};
 
         for (Map.Entry<String, double[]> entry : positions.entrySet()) {
             double r = nodeRadii.get(entry.getKey());
             extend(bounds, entry.getValue()[0] - r, entry.getValue()[1] - r);
             extend(bounds, entry.getValue()[0] + r, entry.getValue()[1] + r);
+            // Reserve room above the node for its self-loop badge, if any.
+            extend(bounds, entry.getValue()[0], entry.getValue()[1] - r - 26);
         }
 
         for (List<NavigationEdge> group : grouped.values()) {
             for (int i = 0; i < group.size(); i++) {
 
                 NavigationEdge edge = group.get(i);
-                double[][] geometry = edgeGeometry(edge, positions, nodeRadii, i);
+                double[][] geometry = nonLoopEdgeGeometry(edge, positions, i);
+                boolean onPath = pathSignatures.contains(edge.fromState()) && pathSignatures.contains(edge.toState());
 
-                edgesSvg.append(renderEdge(edge, geometry, edgeFrequency.get(edge)));
+                edgesSvg.append(renderGraphEdge(edge, geometry, edgeFrequency.get(edge), onPath));
 
                 for (double[] point : geometry) {
                     extend(bounds, point[0], point[1]);
@@ -450,33 +640,105 @@ public class HtmlExplainabilityReportGenerator {
         double minY = bounds[1] - pad;
         double viewWidth = bounds[2] - bounds[0] + 2 * pad;
         double viewHeight = bounds[3] - bounds[1] + 2 * pad;
+        double svgWidth = Math.max(400, viewWidth);
+        double svgHeight = svgWidth * (viewHeight / viewWidth);
 
-        section.append("<svg class=\"graph\" viewBox=\"")
+        StringBuilder svg = new StringBuilder();
+        svg.append("<svg class=\"graph\" viewBox=\"")
                 .append((int) minX).append(' ').append((int) minY).append(' ')
                 .append((int) viewWidth).append(' ').append((int) viewHeight)
+                .append("\" width=\"").append((int) svgWidth)
+                .append("\" height=\"").append((int) svgHeight)
                 .append("\">");
 
-        section.append("<defs><marker id=\"arrow\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" "
+        svg.append("<defs><marker id=\"arrow\" viewBox=\"0 0 10 10\" refX=\"9\" refY=\"5\" "
                 + "markerWidth=\"6\" markerHeight=\"6\" orient=\"auto-start-reverse\">"
                 + "<path d=\"M0,0 L10,5 L0,10 z\" class=\"arrowhead\"/></marker></defs>");
 
-        section.append(edgesSvg);
+        svg.append(edgesSvg);
 
         int index = 1;
-
         for (String state : states) {
             long visits = data.stateVisitCounts().getOrDefault(state, 1L);
-            section.append(renderNode(data.knowledgeBase(), state, positions.get(state), nodeRadii.get(state), visits, index++));
+            boolean onPath = pathSignatures.contains(state);
+            svg.append(renderGraphNode(data.knowledgeBase(), state, positions.get(state), nodeRadii.get(state),
+                    visits, index++, selfLoopCountByState.getOrDefault(state, 0L), onPath));
         }
 
-        section.append("</svg>");
-        section.append(renderNodeDictionary(data.knowledgeBase()));
-        section.append(renderFlowsAndJourneys(data.knowledgeBase()));
-        section.append(renderUxQuality(data.knowledgeBase()));
-        section.append(renderPageInspection(data.knowledgeBase()));
-        section.append("</section>");
+        svg.append("</svg>");
 
-        return section.toString();
+        return svg.toString();
+    }
+
+    /** BFS depth from the first-discovered state — which top-to-bottom layer each node renders in. */
+    private Map<String, Integer> computeLayeredDepth(List<String> states, List<NavigationEdge> edges) {
+
+        Map<String, List<String>> adjacency = new LinkedHashMap<>();
+        for (NavigationEdge edge : edges) {
+            if (!edge.fromState().equals(edge.toState())) {
+                adjacency.computeIfAbsent(edge.fromState(), key -> new ArrayList<>()).add(edge.toState());
+            }
+        }
+
+        Map<String, Integer> depth = new LinkedHashMap<>();
+
+        if (states.isEmpty()) {
+            return depth;
+        }
+
+        Deque<String> queue = new ArrayDeque<>();
+        depth.put(states.get(0), 0);
+        queue.add(states.get(0));
+
+        while (!queue.isEmpty()) {
+            String current = queue.poll();
+            for (String next : adjacency.getOrDefault(current, List.of())) {
+                if (!depth.containsKey(next)) {
+                    depth.put(next, depth.get(current) + 1);
+                    queue.add(next);
+                }
+            }
+        }
+
+        // Anything BFS didn't reach (shouldn't normally happen — every
+        // discovered state got there via some transition — but stay
+        // defensive) goes one layer past the deepest reached state rather
+        // than being silently dropped from the layout.
+        int fallbackDepth = depth.values().stream().mapToInt(Integer::intValue).max().orElse(0) + 1;
+        for (String state : states) {
+            depth.putIfAbsent(state, fallbackDepth);
+        }
+
+        return depth;
+    }
+
+    /** The raw state signatures on this run's actual knowledge path — same sequence Path View renders, for highlighting. */
+    private Set<String> journeyPathSignatures(MissionReportData data) {
+
+        KnowledgeBase knowledgeBase = data.knowledgeBase();
+        List<Journey> observed = knowledgeBase.get(JourneyCatalog.class).map(JourneyCatalog::observed).orElse(List.of());
+
+        if (observed.isEmpty()) {
+            return Set.of();
+        }
+
+        Set<String> signatures = new LinkedHashSet<>();
+        for (String nodeKey : observed.get(0).actualNodeKeySequence()) {
+            knowledgeBase.get(NodeCatalog.class).flatMap(catalog -> catalog.byKey(nodeKey))
+                    .map(node -> signatureForNode(knowledgeBase, node))
+                    .filter(signature -> signature != null)
+                    .ifPresent(signatures::add);
+        }
+
+        return signatures;
+    }
+
+    /** The inverse of {@link #nodeForSignature} — a Node's raw state signature, via the State it belongs to. */
+    private String signatureForNode(KnowledgeBase knowledgeBase, Node node) {
+        return knowledgeBase.get(StateCatalog.class)
+                .flatMap(catalog -> catalog.byId(node.stateId()))
+                .map(State::stateSignature)
+                .orElse(null);
     }
 
     /**
@@ -590,11 +852,15 @@ public class HtmlExplainabilityReportGenerator {
                 "<h3>UX Quality</h3><table><thead><tr><th>Type</th><th>Severity</th><th>Summary</th><th>Evidence</th></tr></thead><tbody>");
 
         for (UxFinding finding : findings) {
-            table.append("<tr><td>").append(escape(finding.type().name())).append("</td>")
-                    .append("<td><span class=\"badge severity-").append(finding.severity().name().toLowerCase()).append("\">")
-                    .append(escape(finding.severity().name())).append("</span></td>")
+            table.append("<tr><td><strong>").append(escape(PlainLanguageGlossary.uxFindingLabel(finding.type()))).append("</strong>")
+                    .append("<div class=\"meaning\">").append(escape(PlainLanguageGlossary.uxFindingExplanation(finding.type()))).append("</div>")
+                    .append("<code class=\"tech-id\">").append(escape(finding.type().name())).append("</code></td>")
+                    .append("<td><span class=\"badge severity-").append(finding.severity().name().toLowerCase())
+                    .append("\" title=\"").append(escape(PlainLanguageGlossary.severityWhyItMatters(finding.severity()))).append("\">")
+                    .append(escape(PlainLanguageGlossary.severityLabel(finding.severity()))).append("</span></td>")
                     .append("<td>").append(escape(finding.summary())).append("</td>")
-                    .append("<td>").append(escape(finding.evidence())).append("</td></tr>");
+                    .append("<td><code class=\"evidence-detail\">").append(finding.evidence().isBlank() ? "&mdash;" : "Element: " + escape(finding.evidence()))
+                    .append("</code></td></tr>");
         }
 
         table.append("</tbody></table>");
@@ -622,11 +888,15 @@ public class HtmlExplainabilityReportGenerator {
                 "<h3>Page Inspection</h3><table><thead><tr><th>Type</th><th>Severity</th><th>Summary</th><th>Evidence</th></tr></thead><tbody>");
 
         for (InspectionFinding finding : findings) {
-            table.append("<tr><td>").append(escape(finding.type().name())).append("</td>")
-                    .append("<td><span class=\"badge severity-").append(finding.severity().name().toLowerCase()).append("\">")
-                    .append(escape(finding.severity().name())).append("</span></td>")
+            table.append("<tr><td><strong>").append(escape(PlainLanguageGlossary.inspectionCheckLabel(finding.type()))).append("</strong>")
+                    .append("<div class=\"meaning\">").append(escape(PlainLanguageGlossary.inspectionCheckExplanation(finding.type()))).append("</div>")
+                    .append("<code class=\"tech-id\">").append(escape(finding.type().name())).append("</code></td>")
+                    .append("<td><span class=\"badge severity-").append(finding.severity().name().toLowerCase())
+                    .append("\" title=\"").append(escape(PlainLanguageGlossary.severityWhyItMatters(finding.severity()))).append("\">")
+                    .append(escape(PlainLanguageGlossary.severityLabel(finding.severity()))).append("</span></td>")
                     .append("<td>").append(escape(finding.summary())).append("</td>")
-                    .append("<td>").append(escape(finding.evidence())).append("</td></tr>");
+                    .append("<td><code class=\"evidence-detail\">").append(finding.evidence().isBlank() ? "&mdash;" : "Element: " + escape(finding.evidence()))
+                    .append("</code></td></tr>");
         }
 
         table.append("</tbody></table>");
@@ -665,28 +935,16 @@ public class HtmlExplainabilityReportGenerator {
     }
 
     /**
-     * Returns the points defining an edge's curve — [start, control(s)...,
-     * labelAnchor] — used both to draw the path (renderEdge) and to bound
-     * the SVG viewBox (renderGraph), so the two can never drift out of sync.
+     * Returns the points defining a (non-self-loop) edge's curve —
+     * [start, control, end] — used both to draw the path
+     * (renderGraphEdge) and to bound the SVG viewBox, so the two can
+     * never drift out of sync. Self-loops are no longer drawn as edges at
+     * all — see renderGraphView's self-loop badge instead.
      */
-    private double[][] edgeGeometry(
-            NavigationEdge edge, Map<String, double[]> positions, Map<String, Double> radii, int parallelIndex) {
+    private double[][] nonLoopEdgeGeometry(NavigationEdge edge, Map<String, double[]> positions, int parallelIndex) {
 
         double[] from = positions.get(edge.fromState());
         double[] to = positions.get(edge.toState());
-        double fromRadius = radii.get(edge.fromState());
-
-        if (edge.fromState().equals(edge.toState())) {
-
-            double loopOffset = 40 + parallelIndex * 18;
-
-            double[] start = {from[0], from[1] - fromRadius};
-            double[] ctrl1 = {from[0] - loopOffset, from[1] - loopOffset};
-            double[] ctrl2 = {from[0] + loopOffset, from[1] - loopOffset};
-            double[] label = {from[0], from[1] - fromRadius - loopOffset};
-
-            return new double[][]{start, ctrl1, ctrl2, label};
-        }
 
         double curve = parallelIndex * 22;
         double midX = (from[0] + to[0]) / 2 - (to[1] - from[1]) * 0.001 * curve * 10;
@@ -695,57 +953,55 @@ public class HtmlExplainabilityReportGenerator {
         return new double[][]{{from[0], from[1]}, {midX, midY}, {to[0], to[1]}};
     }
 
-    private String renderNode(KnowledgeBase knowledgeBase, String state, double[] pos, double radius, long visits, int index) {
+    private String renderGraphNode(
+            KnowledgeBase knowledgeBase, String state, double[] pos, double radius, long visits, int index,
+            long selfLoopCount, boolean onPath) {
 
         double heatOpacity = nodeHeatOpacity(visits);
 
-        // Knowledge Enrichment Layer: the tooltip leads with the node's
-        // real name when one exists — the raw state signature (url +
-        // element fingerprint) stays available right after it for anyone
-        // who needs the underlying detail, same info the tooltip always
-        // showed, just no longer the only thing shown.
-        String displayName = nodeForSignature(knowledgeBase, state).map(Node::displayName).orElse(null);
-        String titlePrefix = displayName != null ? displayName + " (S" + index + ") — " : "S" + index + " — ";
+        // Real display name is the primary visible label now — "S1" alone
+        // told a reader nothing without hovering; the raw signature and
+        // per-run label both stay available in the tooltip for anyone who
+        // needs them.
+        String displayName = nodeForSignature(knowledgeBase, state).map(Node::displayName).orElse("S" + index);
+        String label = displayName.length() > 16 ? displayName.substring(0, 14) + "…" : displayName;
 
-        return String.format(
-                "<g class=\"node\" data-state=\"%s\">"
-                        + "<circle cx=\"%.1f\" cy=\"%.1f\" r=\"%.1f\" "
-                        + "style=\"fill: var(--accent); fill-opacity: %.2f\"/>"
-                        + "<text x=\"%.1f\" y=\"%.1f\">S%d</text>"
-                        + "<title>%s%s (visited %d time%s)</title>"
-                        + "</g>",
-                escapeAttr(state), pos[0], pos[1], radius, heatOpacity,
-                pos[0], pos[1] + 5, index, escape(titlePrefix), escape(state), visits, visits == 1 ? "" : "s"
-        );
+        StringBuilder node = new StringBuilder();
+        node.append("<g class=\"node").append(onPath ? " on-path" : "").append("\" data-state=\"")
+                .append(escapeAttr(state)).append("\">");
+
+        node.append(String.format(
+                "<circle cx=\"%.1f\" cy=\"%.1f\" r=\"%.1f\" style=\"fill: var(--accent); fill-opacity: %.2f\"/>",
+                pos[0], pos[1], radius, heatOpacity));
+
+        node.append(String.format(
+                "<text x=\"%.1f\" y=\"%.1f\" class=\"node-label\">%s</text>",
+                pos[0], pos[1] + 5, escape(label)));
+
+        if (selfLoopCount > 0) {
+            node.append(String.format(
+                    "<text x=\"%.1f\" y=\"%.1f\" class=\"self-loop-badge\">×%d</text>",
+                    pos[0], pos[1] - radius - 10, selfLoopCount));
+        }
+
+        node.append(String.format(
+                "<title>%s — %s (S%d, visited %d time%s%s)</title>",
+                escape(displayName), escape(state), index, visits, visits == 1 ? "" : "s",
+                selfLoopCount > 0
+                        ? ", " + selfLoopCount + " repeated action" + (selfLoopCount == 1 ? "" : "s") + " here"
+                        : ""));
+
+        node.append("</g>");
+
+        return node.toString();
     }
 
-    private String renderEdge(NavigationEdge edge, double[][] geometry, long frequency) {
+    private String renderGraphEdge(NavigationEdge edge, double[][] geometry, long frequency, boolean onPath) {
 
-        String label = escape(edge.actionType() + " " + shortenTarget(edge.actionTarget()))
+        String label = escape(PlainLanguageGlossary.actionVerb(edge.actionType()) + " " + shortenTarget(edge.actionTarget()))
                 + (frequency > 1 ? " (×" + frequency + ")" : "");
 
         double strokeWidth = edgeStrokeWidth(frequency);
-
-        if (edge.fromState().equals(edge.toState())) {
-
-            double[] start = geometry[0];
-            double[] ctrl1 = geometry[1];
-            double[] ctrl2 = geometry[2];
-            double[] labelPos = geometry[3];
-
-            String path = String.format(
-                    "M %.1f %.1f C %.1f %.1f, %.1f %.1f, %.1f %.1f",
-                    start[0], start[1], ctrl1[0], ctrl1[1], ctrl2[0], ctrl2[1], start[0], start[1]
-            );
-
-            return "<g class=\"edge\" data-from=\"" + escapeAttr(edge.fromState())
-                    + "\" data-to=\"" + escapeAttr(edge.toState()) + "\">"
-                    + "<path d=\"" + path + "\" class=\"edge-line self-loop\" "
-                    + "style=\"stroke-width: " + String.format("%.1f", strokeWidth) + "\" "
-                    + "marker-end=\"url(#arrow)\"/>"
-                    + "<text x=\"" + labelPos[0] + "\" y=\"" + labelPos[1] + "\">" + label + "</text>"
-                    + "</g>";
-        }
 
         double[] from = geometry[0];
         double[] mid = geometry[1];
@@ -756,7 +1012,7 @@ public class HtmlExplainabilityReportGenerator {
                 from[0], from[1], mid[0], mid[1], to[0], to[1]
         );
 
-        return "<g class=\"edge\" data-from=\"" + escapeAttr(edge.fromState())
+        return "<g class=\"edge" + (onPath ? " on-path" : "") + "\" data-from=\"" + escapeAttr(edge.fromState())
                 + "\" data-to=\"" + escapeAttr(edge.toState()) + "\">"
                 + "<path d=\"" + path + "\" class=\"edge-line\" "
                 + "style=\"stroke-width: " + String.format("%.1f", strokeWidth) + "\" "
@@ -813,10 +1069,10 @@ public class HtmlExplainabilityReportGenerator {
         StringBuilder section = new StringBuilder("<section id=\"learning\"><h2>Learning</h2>");
 
         section.append("<div class=\"stats\">")
-                .append(tile("New Experiences", String.valueOf(summary.newExperiences())))
-                .append(tile("Updated Actions", String.valueOf(summary.updatedActions())))
-                .append(tile("Confidence Increased", String.valueOf(summary.confidenceIncreased())))
-                .append(tile("Confidence Reduced", String.valueOf(summary.confidenceReduced())))
+                .append(tile("New Things Learned", String.valueOf(summary.newExperiences())))
+                .append(tile("Adjusted Based on Results", String.valueOf(summary.updatedActions())))
+                .append(tile("Got More Reliable", String.valueOf(summary.confidenceIncreased())))
+                .append(tile("Got Less Reliable", String.valueOf(summary.confidenceReduced())))
                 .append("</div>");
 
         if (summary.actionPerformance().isEmpty()) {
@@ -830,10 +1086,12 @@ public class HtmlExplainabilityReportGenerator {
         List<PatternStatistics> worstFirst = summary.actionPerformance().reversed();
         List<PatternStatistics> worst = worstFirst.subList(0, Math.min(3, worstFirst.size()));
 
+        section.append("<p class=\"caption\">").append(escape(learningLine(summary))).append("</p>");
+        section.append("<details class=\"learning-detail\"><summary>Show the technical breakdown, action by action</summary>");
         section.append("<div class=\"performance-columns\">");
         section.append("<div><h3>Best Performing Actions</h3>").append(performanceTable(best)).append("</div>");
         section.append("<div><h3>Worst Performing Actions</h3>").append(performanceTable(worst)).append("</div>");
-        section.append("</div></section>");
+        section.append("</div></details></section>");
 
         return section.toString();
     }
@@ -845,7 +1103,7 @@ public class HtmlExplainabilityReportGenerator {
 
         for (PatternStatistics stat : stats) {
 
-            table.append("<tr><td>").append(escape(stat.action().type() + " " + stat.action().target())).append("</td>")
+            table.append("<tr><td>").append(escape(PlainLanguageGlossary.actionVerb(stat.action().type()) + " " + stat.action().target())).append("</td>")
                     .append("<td><div class=\"bar\"><div class=\"bar-fill\" style=\"width:")
                     .append((int) (stat.successRate() * 100)).append("%\"></div></div> ")
                     .append(String.format("%.0f%%", stat.successRate() * 100)).append("</td>")
@@ -859,45 +1117,18 @@ public class HtmlExplainabilityReportGenerator {
     }
 
     /**
-     * Findings Dashboard (Reporting v2 Stage 2): the same BugClusters
-     * Phase 6 already computed, grouped one level further by what kind
-     * of problem they are (see FindingCategory) instead of only by
-     * fingerprint.
+     * Consolidates the old "Findings Dashboard" (bug clusters grouped by
+     * {@link FindingCategory}) and "Bug Clusters" (the same clusters,
+     * flat, most-severe-first) sections — they rendered the identical
+     * {@code data.bugClusters()} list twice, just grouped differently.
+     * Both views are still server-rendered (no client round-trip), just
+     * toggled with the same vanilla-JS show/hide idiom the timeline
+     * filter already established, one visible at a time.
      */
-    private String renderFindingsDashboard(MissionReportData data) {
+    private String renderBugClustersConsolidated(MissionReportData data) {
 
-        StringBuilder section = new StringBuilder("<section id=\"findings-dashboard\"><h2>Findings Dashboard</h2>"
-                + "<p class=\"caption\">Bug clusters grouped by category, not just fingerprint.</p>");
-
-        if (data.findingsByCategory().isEmpty()) {
-            section.append("<p class=\"empty\">No findings to categorize.</p></section>");
-            return section.toString();
-        }
-
-        for (Map.Entry<FindingCategory, List<BugCluster>> entry : data.findingsByCategory().entrySet()) {
-
-            section.append("<h3>").append(escape(entry.getKey().toString()))
-                    .append(" (").append(entry.getValue().size()).append(")</h3>");
-
-            for (BugCluster cluster : entry.getValue()) {
-
-                section.append("<div class=\"finding ").append(cluster.severity().name().toLowerCase()).append("\">")
-                        .append("<span class=\"severity\">").append(cluster.severity()).append("</span> ")
-                        .append("<span class=\"summary\">").append(escape(cluster.representativeSummary())).append("</span>")
-                        .append("<div class=\"meta\">×").append(cluster.occurrenceCount()).append("</div>")
-                        .append("</div>");
-            }
-        }
-
-        section.append("</section>");
-
-        return section.toString();
-    }
-
-    private String renderBugClusters(MissionReportData data) {
-
-        StringBuilder section = new StringBuilder("<section id=\"bug-clusters\"><h2>Bug Clusters</h2>"
-                + "<p class=\"caption\">Findings grouped by a normalized fingerprint (Phase 6) — "
+        StringBuilder section = new StringBuilder("<section id=\"bug-clusters\"><h2>Findings</h2>"
+                + "<p class=\"caption\">Grouped by a normalized fingerprint (Phase 6) — "
                 + "recurring or cross-page clusters are stronger signals than any single occurrence.</p>");
 
         if (data.bugClusters().isEmpty()) {
@@ -905,55 +1136,100 @@ public class HtmlExplainabilityReportGenerator {
             return section.toString();
         }
 
+        Map<String, List<Finding>> occurrencesByFingerprint = data.findings().stream()
+                .collect(Collectors.groupingBy(BugFingerprint::of, LinkedHashMap::new, Collectors.toList()));
+
+        section.append("<div class=\"cluster-group-toggle timeline-filter\">"
+                + "<button data-group=\"category\" class=\"active\">By Category</button>"
+                + "<button data-group=\"flat\">Most Severe First</button>"
+                + "</div>");
+
+        section.append("<div class=\"cluster-view\" data-group-view=\"category\">");
+        for (Map.Entry<FindingCategory, List<BugCluster>> entry : data.findingsByCategory().entrySet()) {
+            section.append("<h3>").append(escape(PlainLanguageGlossary.categoryLabel(entry.getKey())))
+                    .append(" (").append(entry.getValue().size()).append(")</h3>");
+            for (BugCluster cluster : entry.getValue()) {
+                section.append(renderClusterRow(data, cluster, occurrencesByFingerprint));
+            }
+        }
+        section.append("</div>");
+
+        section.append("<div class=\"cluster-view\" data-group-view=\"flat\" style=\"display:none\">");
         for (BugCluster cluster : data.bugClusters()) {
+            section.append(renderClusterRow(data, cluster, occurrencesByFingerprint));
+        }
+        section.append("</div>");
 
-            section.append("<div class=\"finding ").append(cluster.severity().name().toLowerCase()).append("\">")
-                    .append("<span class=\"severity\">").append(cluster.severity()).append("</span> ")
-                    .append("<span class=\"summary\">").append(escape(cluster.representativeSummary())).append("</span>")
-                    .append("<div class=\"meaning\">").append(escape(data.explanationFor(cluster))).append("</div>");
+        section.append("</section>");
 
-            section.append("<div class=\"meta\">×").append(cluster.occurrenceCount());
+        return section.toString();
+    }
 
-            if (cluster.spansMultiplePages()) {
-                section.append(" — seen on ").append(cluster.urls().size())
-                        .append(" different pages, may share a root cause");
+    private String renderClusterRow(
+            MissionReportData data, BugCluster cluster, Map<String, List<Finding>> occurrencesByFingerprint) {
+
+        StringBuilder row = new StringBuilder();
+
+        row.append("<div class=\"finding ").append(cluster.severity().name().toLowerCase()).append("\">")
+                .append("<span class=\"badge severity-").append(cluster.severity().name().toLowerCase())
+                .append("\" title=\"").append(escape(PlainLanguageGlossary.severityWhyItMatters(cluster.severity()))).append("\">")
+                .append(escape(PlainLanguageGlossary.severityLabel(cluster.severity()))).append("</span> ")
+                .append("<span class=\"summary\">").append(escape(cluster.representativeSummary())).append("</span>")
+                .append("<div class=\"meaning\">").append(escape(data.explanationFor(cluster))).append("</div>");
+
+        row.append("<div class=\"meta\">×").append(cluster.occurrenceCount());
+
+        if (cluster.spansMultiplePages()) {
+            row.append(" — seen on ").append(cluster.urls().size())
+                    .append(" different pages, may share a root cause");
+        }
+
+        row.append("</div>");
+
+        List<Finding> occurrences = occurrencesByFingerprint.getOrDefault(cluster.fingerprint(), List.of());
+
+        if (occurrences.size() > 1) {
+
+            row.append("<details class=\"cluster-occurrences\"><summary>Show ")
+                    .append(occurrences.size()).append(" individual occurrences</summary>");
+
+            for (Finding finding : occurrences) {
+                row.append("<div class=\"occurrence\">").append(escape(finding.summary()))
+                        .append("<div class=\"meta\">").append(escape(finding.url()))
+                        .append(" — ").append(finding.detectedAt()).append("</div></div>");
             }
 
-            section.append("</div></div>");
+            row.append("</details>");
         }
 
-        section.append("</section>");
+        row.append("</div>");
 
-        return section.toString();
+        return row.toString();
     }
 
+    private static final Pattern FRAME_TARGET_PREFIX = Pattern.compile("^frame:(\\d+)>(.*)$", Pattern.DOTALL);
+
+    /**
+     * A framed target (see PlaywrightBrowser's iframe support) carries a
+     * raw {@code frame:N>} prefix that means nothing to a reader — this
+     * strips it and appends a plain-language note instead, before the
+     * existing length truncation, so a report never shows the raw
+     * mechanism string.
+     */
     private String shortenTarget(String target) {
-        return target.length() > 24 ? target.substring(0, 21) + "..." : target;
-    }
 
-    private String renderFindings(MissionReportData data) {
+        Matcher framePrefix = FRAME_TARGET_PREFIX.matcher(target);
+        String suffix = "";
+        String bare = target;
 
-        StringBuilder section = new StringBuilder("<section id=\"findings\"><h2>Findings (most severe first)</h2>");
-
-        if (data.findings().isEmpty()) {
-            section.append("<p class=\"empty\">No findings.</p></section>");
-            return section.toString();
+        if (framePrefix.matches()) {
+            bare = framePrefix.group(2);
+            suffix = " (in embedded frame)";
         }
 
-        for (Finding finding : data.rankedFindings()) {
+        String shortened = bare.length() > 24 ? bare.substring(0, 21) + "..." : bare;
 
-            section.append("<div class=\"finding ").append(finding.severity().name().toLowerCase()).append("\">")
-                    .append("<span class=\"severity\">").append(finding.severity()).append("</span> ")
-                    .append("<span class=\"summary\">").append(escape(finding.summary())).append("</span>")
-                    .append("<div class=\"meaning\">").append(escape(data.explain(finding))).append("</div>")
-                    .append("<div class=\"meta\">").append(escape(finding.url()))
-                    .append(" — ").append(finding.detectedAt()).append("</div>")
-                    .append("</div>");
-        }
-
-        section.append("</section>");
-
-        return section.toString();
+        return shortened + suffix;
     }
 
     private String renderSteps(MissionReportData data) {
@@ -975,30 +1251,36 @@ public class HtmlExplainabilityReportGenerator {
                             step.candidates().size() - 1 == 1 ? "" : "s");
 
             boolean stepWasLearned = selected.reasoning().contains("learning-adjusted");
+            String selectedValue = selected.action().value();
 
             section.append("<details class=\"step\">")
                     .append("<summary>Step ").append(step.step()).append(": ")
-                    .append(escape(selected.action().type() + " " + selected.action().target()))
+                    .append("<span class=\"strategy-badge\">").append(escape(step.strategy())).append("</span> ")
+                    .append(escape(PlainLanguageGlossary.actionVerb(selected.action().type()) + " " + selected.action().target()))
+                    .append(selectedValue != null && !selectedValue.isBlank()
+                            ? " <span class=\"value-tag\">value: " + escape(selectedValue) + "</span>" : "")
                     .append(" <span class=\"confidence\">confidence=")
-                    .append(String.format("%.2f", selected.confidence()))
+                    .append(String.format("%.0f%%", selected.confidence() * 100))
                     .append(" (").append(marginText).append(")</span>")
                     .append(stepWasLearned ? " <span class=\"learned-badge\">learned</span>" : "")
                     .append("</summary>");
 
             section.append("<div class=\"candidates\"><table><thead><tr>"
-                    + "<th>Type</th><th>Target</th><th>Confidence</th><th></th><th>Reasoning</th></tr></thead><tbody>");
+                    + "<th>Type</th><th>Target</th><th>Value</th><th>Confidence</th><th></th><th>Reasoning</th></tr></thead><tbody>");
 
             for (CandidateAction candidate : step.candidates()) {
 
                 boolean isSelected = candidate.action().id().equals(selected.action().id());
                 boolean candidateWasLearned = candidate.reasoning().contains("learning-adjusted");
+                String candidateValue = candidate.action().value();
 
                 section.append("<tr class=\"").append(isSelected ? "selected" : "").append("\">")
-                        .append("<td>").append(candidate.action().type()).append("</td>")
+                        .append("<td>").append(escape(PlainLanguageGlossary.actionVerb(candidate.action().type()))).append("</td>")
                         .append("<td>").append(escape(candidate.action().target())).append("</td>")
+                        .append("<td>").append(candidateValue != null && !candidateValue.isBlank() ? escape(candidateValue) : "&mdash;").append("</td>")
                         .append("<td><div class=\"bar\"><div class=\"bar-fill\" style=\"width:")
                         .append((int) (candidate.confidence() * 100)).append("%\"></div></div> ")
-                        .append(String.format("%.2f", candidate.confidence())).append("</td>")
+                        .append(String.format("%.0f%%", candidate.confidence() * 100)).append("</td>")
                         .append("<td>").append(candidateWasLearned ? "<span class=\"learned-badge\">learned</span>" : "")
                         .append(isSelected ? " <span class=\"winner-badge\">winner</span>" : "").append("</td>")
                         .append("<td>").append(escape(candidate.reasoning())).append("</td>")
@@ -1030,11 +1312,21 @@ public class HtmlExplainabilityReportGenerator {
                 body { margin: 0; padding: 2rem; background: var(--bg); color: var(--fg);
                     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
                 header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
-                .toc { position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap; gap: .25rem 1rem;
-                    background: var(--bg); padding: .6rem 0 1rem; margin-bottom: 1rem;
-                    border-bottom: 1px solid var(--border); font-size: .82rem; }
-                .toc a { color: var(--muted); text-decoration: none; }
-                .toc a:hover { color: var(--accent); text-decoration: underline; }
+                .tabs { position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap; gap: .4rem;
+                    background: var(--bg); padding: .6rem 0 1rem; margin-bottom: 1.25rem;
+                    border-bottom: 1px solid var(--border); }
+                .tab-btn { font: inherit; font-size: .88rem; font-weight: 600; padding: .45rem 1rem;
+                    border-radius: .5rem .5rem 0 0; border: 1px solid transparent; background: none;
+                    color: var(--muted); cursor: pointer; }
+                .tab-btn:hover { color: var(--fg); }
+                .tab-btn.active { color: var(--accent); border: 1px solid var(--border);
+                    border-bottom-color: var(--bg); background: var(--card);
+                    position: relative; top: 1px; }
+                .tab-panel.active { display: block; }
+                .cluster-occurrences { margin-top: .5rem; font-size: .82rem; }
+                .cluster-occurrences summary { cursor: pointer; font-weight: 600; color: var(--accent); }
+                .cluster-occurrences .occurrence { padding: .4rem 0; border-top: 1px solid var(--border); }
+                .cluster-occurrences .occurrence:first-of-type { border-top: none; margin-top: .4rem; }
                 h1 { font-size: 1.4rem; margin: 0; }
                 h2 { font-size: 1.05rem; margin: 0 0 .75rem; }
                 .badge { padding: .25rem .75rem; border-radius: 999px; font-weight: 600; font-size: .85rem; color: #fff; }
@@ -1081,12 +1373,32 @@ public class HtmlExplainabilityReportGenerator {
                 .performance-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-top: 1rem; }
                 .performance-columns h3 { font-size: .9rem; margin: 0 0 .5rem; }
                 @media (max-width: 640px) { .performance-columns { grid-template-columns: 1fr; } }
-                .graph { width: 100%; max-width: 900px; height: auto; overflow: visible; }
+                .graph { display: block; max-width: 100%; height: auto; overflow: visible; }
                 .node circle { fill: var(--card); stroke: var(--accent); stroke-width: 2; }
-                .node text { fill: var(--fg); font-size: 13px; text-anchor: middle; }
+                .node text.node-label { fill: var(--fg); font-size: 13px; font-weight: 600; text-anchor: middle; }
+                .node text.self-loop-badge { fill: var(--muted); font-size: 11px; font-weight: 700; text-anchor: middle; }
+                .node.on-path circle { stroke-width: 3.5; }
                 .edge-line { fill: none; stroke: var(--muted); stroke-width: 1.5; }
                 .edge text { fill: var(--muted); font-size: 10px; text-anchor: middle; }
+                .edge.on-path .edge-line { stroke: var(--accent); }
+                .edge.on-path text { fill: var(--accent); font-weight: 600; }
                 .node.dim, .edge.dim { opacity: .15; }
+
+                .graph-view-toggle { margin-bottom: 1rem; }
+                .path-view { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; margin-bottom: 1rem; }
+                .path-arrow { color: var(--muted); font-size: 1.1rem; flex: none; }
+                .path-step { background: var(--card); border: 1px solid var(--border); border-radius: .6rem;
+                    padding: .55rem .9rem; }
+                .path-step summary { cursor: pointer; font-weight: 600; list-style: none; }
+                .path-step summary::-webkit-details-marker { display: none; }
+                .path-step-name { font-size: .95rem; }
+                .visit-badge { display: inline-block; font-size: .7rem; font-weight: 700; padding: .1rem .45rem;
+                    border-radius: 999px; background: color-mix(in srgb, var(--fg) 10%, transparent); color: var(--muted); }
+                .journey-tag { display: inline-block; font-size: .7rem; font-weight: 700; padding: .1rem .5rem;
+                    border-radius: 999px; background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
+                .path-step-detail { margin-top: .5rem; font-size: .82rem; color: var(--muted); }
+                .path-step-detail ul { margin: 0 0 .4rem; padding-left: 1.1rem; }
+                .path-step-detail .tech-id { margin-top: 0; }
                 .finding { border-left: 4px solid var(--low); background: var(--card);
                     border-radius: .25rem; padding: .6rem 1rem; margin-bottom: .5rem; }
                 .finding.critical { border-color: var(--critical); }
@@ -1094,11 +1406,19 @@ public class HtmlExplainabilityReportGenerator {
                 .finding.medium { border-color: var(--medium); }
                 .finding.low { border-color: var(--low); }
                 .severity { font-weight: 700; font-size: .8rem; }
-                .meaning { font-size: .85rem; margin-top: .3rem; }
+                .meaning { font-size: .85rem; margin-top: .3rem; color: var(--muted); }
                 .meta { color: var(--muted); font-size: .8rem; margin-top: .2rem; }
+                .tech-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .68rem;
+                    color: var(--muted); background: var(--bg); border: 1px solid var(--border); border-radius: .25rem;
+                    padding: .05rem .35rem; display: inline-block; margin-top: .3rem; }
+                .evidence-detail { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .78rem;
+                    color: var(--muted); word-break: break-all; }
                 .step { background: var(--card); border: 1px solid var(--border); border-radius: .5rem;
                     padding: .5rem .9rem; margin-bottom: .5rem; }
                 .step summary { cursor: pointer; font-weight: 600; }
+                .learning-detail { margin-top: .5rem; }
+                .learning-detail summary { cursor: pointer; font-weight: 600; color: var(--accent); font-size: .85rem; }
+                .learning-detail .performance-columns { margin-top: .75rem; }
                 .confidence { color: var(--muted); font-weight: 400; font-size: .85rem; }
                 .candidates { overflow-x: auto; margin-top: .75rem; }
                 table { border-collapse: collapse; width: 100%; font-size: .85rem; }
@@ -1116,6 +1436,9 @@ public class HtmlExplainabilityReportGenerator {
                     padding: .1rem .45rem; border-radius: 999px; text-transform: uppercase; }
                 .learned-badge { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
                 .winner-badge { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
+                .strategy-badge { display: inline-block; font-size: .7rem; font-weight: 700; padding: .1rem .45rem;
+                    border-radius: 999px; text-transform: uppercase; background: color-mix(in srgb, var(--fg) 10%, transparent); color: var(--muted); }
+                .value-tag { color: var(--muted); font-size: .85rem; font-family: ui-monospace, monospace; }
                 .timeline { list-style: none; margin: 0; padding: 0; position: relative; }
                 .timeline::before { content: ""; position: absolute; left: 5.5rem; top: 0; bottom: 0;
                     width: 2px; background: var(--border); }
@@ -1148,6 +1471,69 @@ public class HtmlExplainabilityReportGenerator {
 
     private String js() {
         return """
+                var TAB_ALIASES = {
+                    'plain-summary': 'overview', 'summary': 'overview', 'recommendation': 'overview',
+                    'stats': 'overview', 'plan': 'overview', 'overview': 'overview',
+                    'findings-dashboard': 'findings', 'bug-clusters': 'findings', 'findings': 'findings',
+                    'learning': 'reasoning', 'reasoning-steps': 'reasoning', 'reasoning': 'reasoning',
+                    'timeline': 'timeline',
+                    'coverage': 'world-model', 'world-model': 'world-model'
+                };
+
+                function activateTab(tab) {
+                    document.querySelectorAll('.tab-btn').forEach(function (b) {
+                        var active = b.getAttribute('data-tab') === tab;
+                        b.classList.toggle('active', active);
+                        b.setAttribute('aria-selected', active ? 'true' : 'false');
+                    });
+                    document.querySelectorAll('.tab-panel').forEach(function (p) {
+                        var active = p.getAttribute('data-tab-panel') === tab;
+                        p.classList.toggle('active', active);
+                        p.style.display = active ? '' : 'none';
+                    });
+                }
+
+                document.querySelectorAll('.tab-btn').forEach(function (btn) {
+                    btn.addEventListener('click', function () {
+                        var tab = btn.getAttribute('data-tab');
+                        activateTab(tab);
+                        history.replaceState(null, '', '#' + tab);
+                    });
+                });
+
+                var initialTab = TAB_ALIASES[location.hash.replace('#', '')] || 'overview';
+                activateTab(initialTab);
+
+                window.addEventListener('hashchange', function () {
+                    activateTab(TAB_ALIASES[location.hash.replace('#', '')] || 'overview');
+                });
+
+                document.querySelectorAll('.cluster-group-toggle button').forEach(function (btn) {
+                    btn.addEventListener('click', function () {
+                        document.querySelectorAll('.cluster-group-toggle button').forEach(function (b) {
+                            b.classList.remove('active');
+                        });
+                        btn.classList.add('active');
+                        var group = btn.getAttribute('data-group');
+                        document.querySelectorAll('.cluster-view').forEach(function (v) {
+                            v.style.display = v.getAttribute('data-group-view') === group ? '' : 'none';
+                        });
+                    });
+                });
+
+                document.querySelectorAll('.graph-view-toggle button').forEach(function (btn) {
+                    btn.addEventListener('click', function () {
+                        document.querySelectorAll('.graph-view-toggle button').forEach(function (b) {
+                            b.classList.remove('active');
+                        });
+                        btn.classList.add('active');
+                        var view = btn.getAttribute('data-view');
+                        document.querySelectorAll('.graph-view').forEach(function (v) {
+                            v.style.display = v.getAttribute('data-graph-view') === view ? '' : 'none';
+                        });
+                    });
+                });
+
                 document.querySelectorAll('.node').forEach(function (node) {
                     node.addEventListener('mouseenter', function () {
                         var state = node.getAttribute('data-state');

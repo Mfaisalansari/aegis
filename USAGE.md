@@ -164,18 +164,18 @@ If `username`/`password` aren't set, `DefaultInputValueResolver` falls back to g
 
 Registered in `EngineFactory.java`. All 10 keys:
 
-| Key | Class | Notes |
-|---|---|---|
-| `greedy` | `HighestConfidenceActionScorer` | **Default.** Always picks the highest-confidence candidate. |
-| `random` | `RandomActionScorer` | Picks uniformly at random among candidates. |
-| `risk-based` | `RiskBasedActionScorer` | Weights toward/away from destructive-looking actions. |
-| `breadth-first` | `BreadthFirstActionScorer` | Proxy strategy (element-tag based, not a real graph search yet). |
-| `depth-first` | `DepthFirstActionScorer` | Same caveat as above. |
-| `form-first` | `FormFirstActionScorer` | Prefers filling in forms over navigating away. |
-| `navigation-first` | `NavigationFirstActionScorer` | Prefers following links over local page actions. |
-| `coverage-aware` | `CoverageAwareActionScorer` | Graph-aware (uses `WorldModel`): rewards a candidate *confirmed* by history to lead somewhere not yet visited. |
-| `adaptive` | `AdaptiveActionScorer` | Uses `greedy` normally, switches to `coverage-aware` once 3 iterations pass with no newly discovered state, switches back automatically once one turns up. The only strategy that changes mid-mission on its own. |
-| `llm` | `LlmActionScorer` | A real language model picks among the already-validated candidates. See §6 for configuration. Falls back to `greedy` on any failure. |
+| Key | Class | Behaves like... | Notes |
+|---|---|---|---|
+| `greedy` | `HighestConfidenceActionScorer` | A task-focused user who always takes the most obvious next step, without exploring. | **Default.** Always picks the highest-confidence candidate. |
+| `random` | `RandomActionScorer` | An erratic user clicking without a plan — occasionally stumbles into a bug a careful user never would. | Picks uniformly at random among candidates. |
+| `risk-based` | `RiskBasedActionScorer` | A QA engineer deliberately going straight for the actions most likely to break something — delete, checkout, pay, submit — instead of the safe path. | Weights toward/away from destructive-looking actions. |
+| `breadth-first` | `BreadthFirstActionScorer` | A thorough user who finishes everything on the current screen before moving to the next one. | Proxy strategy (element-tag based, not a real graph search yet). |
+| `depth-first` | `DepthFirstActionScorer` | A user who dives into the next page as soon as something looks promising, rather than lingering on this one. | Same caveat as above. |
+| `form-first` | `FormFirstActionScorer` | A user mid-task, focused on finishing the form in front of them instead of getting distracted by other links. | Prefers filling in forms over navigating away. |
+| `navigation-first` | `NavigationFirstActionScorer` | A user getting oriented — clicking through menus/links to see what's there before committing to a task. | Prefers following links over local page actions. |
+| `coverage-aware` | `CoverageAwareActionScorer` | A completionist tester deliberately trying to visit every screen at least once, not just the ones on the way to the goal. | Graph-aware (uses `WorldModel`): rewards a candidate *confirmed* by history to lead somewhere not yet visited. |
+| `adaptive` | `AdaptiveActionScorer` | A pragmatic user: takes the obvious path first, and only starts exploring more broadly after getting stuck for a while. | Uses `greedy` normally, switches to `coverage-aware` once 3 iterations pass with no newly discovered state, switches back automatically once one turns up. The only strategy that changes mid-mission on its own. |
+| `llm` | `LlmActionScorer` | An experienced human tester weighing the whole page in context, rather than following one fixed rule. | A real language model picks among the already-validated candidates. See §6 for configuration. Falls back to `greedy` on any failure. |
 
 Set via mission parameter, e.g.:
 ```java

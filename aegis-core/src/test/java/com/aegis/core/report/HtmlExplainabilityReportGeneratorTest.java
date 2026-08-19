@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -127,6 +128,10 @@ class HtmlExplainabilityReportGeneratorTest {
         assertTrue(html.contains("UX Quality"));
         assertTrue(html.contains("MISSING_ACCESSIBLE_NAME"));
         assertTrue(html.contains("badge severity-medium"));
+        // Real translated text is now the primary, visible content — the
+        // raw enum/severity above stay only as demoted secondary detail.
+        assertTrue(html.contains("Unlabeled Interactive Element"));
+        assertTrue(html.contains("Worth Fixing"));
     }
 
     @Test
@@ -162,6 +167,311 @@ class HtmlExplainabilityReportGeneratorTest {
         assertTrue(html.contains("Page Inspection"));
         assertTrue(html.contains("CONSOLE_ERROR"));
         assertTrue(html.contains("badge severity-high"));
+        assertTrue(html.contains("Console Error"));
+        assertTrue(html.contains("Important"));
+    }
+
+    @Test
+    void rendersBugClustersGroupedByCategoryByDefault() {
+
+        MissionContext context = new MissionContext(new Mission(UUID.randomUUID(), "Test", "Test", Map.of()));
+        context.getExecutionState().addFinding(
+                new com.aegis.model.finding.Finding(com.aegis.model.finding.FindingSeverity.CRITICAL,
+                        "CRASH: tab crashed", "https://example.com", Instant.now()));
+
+        String html = generator.generate(context, MissionStatus.FAILED);
+
+        assertTrue(html.contains("Crashes"));
+        assertFalse(html.contains("<h3>STABILITY"));
+        assertTrue(html.contains("The browser tab crashed outright"));
+        assertTrue(html.contains("Urgent"));
+    }
+
+    @Test
+    void rendersActionVerbsInsteadOfRawActionTypeInReasoningSteps() {
+
+        MissionContext context = twoStateContext();
+
+        com.aegis.model.reasoning.CandidateAction candidate = new com.aegis.model.reasoning.CandidateAction(
+                click("login-button"), 0.9, "highest confidence");
+
+        context.getExecutionState().addReasoningStep(new com.aegis.model.reasoning.ReasoningStep(
+                1, List.of(candidate), candidate, Instant.now(), "greedy"));
+
+        String html = generator.generate(context, MissionStatus.SUCCESS);
+
+        assertTrue(html.contains("clicked"));
+        assertFalse(html.contains("<td>CLICK</td>"));
+    }
+
+    @Test
+    void rendersTheActiveStrategyAndTheTypedValueForATypeAction() {
+
+        MissionContext context = twoStateContext();
+
+        Action typeAction = typeAction("[id='email']", "aegis.tester");
+        com.aegis.model.reasoning.CandidateAction candidate = new com.aegis.model.reasoning.CandidateAction(
+                typeAction, 0.85, "matched EMAIL field");
+
+        context.getExecutionState().addReasoningStep(new com.aegis.model.reasoning.ReasoningStep(
+                1, List.of(candidate), candidate, Instant.now(), "coverage-aware"));
+
+        String html = generator.generate(context, MissionStatus.SUCCESS);
+
+        assertTrue(html.contains("strategy-badge"));
+        assertTrue(html.contains("coverage-aware"));
+        assertTrue(html.contains("aegis.tester"));
+        assertTrue(html.contains("<th>Value</th>"));
+    }
+
+    @Test
+    void omitsTheValueColumnContentWhenTheActionHasNoTypedValue() {
+
+        MissionContext context = twoStateContext();
+
+        com.aegis.model.reasoning.CandidateAction candidate = new com.aegis.model.reasoning.CandidateAction(
+                click("login-button"), 0.9, "highest confidence");
+
+        context.getExecutionState().addReasoningStep(new com.aegis.model.reasoning.ReasoningStep(
+                1, List.of(candidate), candidate, Instant.now(), "greedy"));
+
+        String html = generator.generate(context, MissionStatus.SUCCESS);
+
+        assertTrue(html.contains("<td>&mdash;</td>"));
+    }
+
+    @Test
+    void wrapsLearningPerformanceTablesInACollapsedDetailsElementWithAPlainTeaserOutside() {
+
+        MissionContext context = twoStateContext();
+
+        com.aegis.model.reasoning.CandidateAction candidate = new com.aegis.model.reasoning.CandidateAction(
+                click("login-button"), 0.9, "highest confidence");
+
+        com.aegis.model.experience.Experience experience = com.aegis.model.experience.Experience.create(
+                context, observation("https://example.com/login", "Login", "login-button"),
+                candidate, com.aegis.model.experience.ExperienceOutcome.SUCCESS, Duration.ofMillis(200));
+
+        MissionReportData data = MissionReportData.from(
+                context, MissionStatus.SUCCESS, new RuleBasedBugExplainer(), new RuleBasedRecommendationEngine(),
+                new RuleBasedMissionPlanner().plan(context.getMission()), List.of(experience));
+
+        String html = generator.generate(data);
+
+        assertTrue(html.contains("learning-detail"));
+        assertFalse(html.contains("<details class=\"learning-detail\" open>"));
+
+        int detailsIndex = html.indexOf("<details class=\"learning-detail\">");
+        int teaserIndex = html.indexOf("id=\"learning\"");
+        assertTrue(teaserIndex >= 0 && detailsIndex > teaserIndex);
+    }
+
+    @Test
+    void rendersExactlyFiveTabsWithOverviewActiveByDefault() {
+
+        String html = generator.generate(twoStateContext(), MissionStatus.SUCCESS);
+
+        assertTrue(html.contains("data-tab=\"overview\""));
+        assertTrue(html.contains("data-tab=\"findings\""));
+        assertTrue(html.contains("data-tab=\"reasoning\""));
+        assertTrue(html.contains("data-tab=\"timeline\""));
+        assertTrue(html.contains("data-tab=\"world-model\""));
+
+        assertTrue(html.contains("class=\"tab-btn active\" data-tab=\"overview\""));
+        assertFalse(html.contains("class=\"tab-btn active\" data-tab=\"findings\""));
+        assertFalse(html.contains("class=\"tab-btn active\" data-tab=\"reasoning\""));
+        assertFalse(html.contains("class=\"tab-btn active\" data-tab=\"timeline\""));
+        assertFalse(html.contains("class=\"tab-btn active\" data-tab=\"world-model\""));
+    }
+
+    @Test
+    void onlyTheOverviewTabPanelIsVisibleByDefault() {
+
+        String html = generator.generate(twoStateContext(), MissionStatus.SUCCESS);
+
+        assertTrue(html.contains("data-tab-panel=\"overview\" role=\"tabpanel\">"));
+        assertTrue(html.contains("data-tab-panel=\"findings\" role=\"tabpanel\" style=\"display:none\">"));
+        assertTrue(html.contains("data-tab-panel=\"reasoning\" role=\"tabpanel\" style=\"display:none\">"));
+        assertTrue(html.contains("data-tab-panel=\"timeline\" role=\"tabpanel\" style=\"display:none\">"));
+        assertTrue(html.contains("data-tab-panel=\"world-model\" role=\"tabpanel\" style=\"display:none\">"));
+    }
+
+    @Test
+    void findingsTabContainsUxQualityAndPageInspectionSections() {
+
+        String html = generator.generate(twoStateContext(), MissionStatus.SUCCESS);
+
+        int findingsOpen = html.indexOf("data-tab-panel=\"findings\"");
+        int uxQualityIndex = html.indexOf("<h3>UX Quality</h3>");
+        int nextPanelIndex = html.indexOf("data-tab-panel=\"reasoning\"");
+
+        assertTrue(findingsOpen >= 0);
+        assertTrue(uxQualityIndex > findingsOpen);
+        assertTrue(uxQualityIndex < nextPanelIndex);
+    }
+
+    @Test
+    void worldModelTabContainsCoverage() {
+
+        String html = generator.generate(twoStateContext(), MissionStatus.SUCCESS);
+
+        int worldModelOpen = html.indexOf("data-tab-panel=\"world-model\"");
+        int coverageIndex = html.indexOf("id=\"coverage\"");
+        int mainClose = html.indexOf("</main>");
+
+        assertTrue(worldModelOpen >= 0);
+        assertTrue(coverageIndex > worldModelOpen);
+        assertTrue(coverageIndex < mainClose);
+    }
+
+    @Test
+    void findingsTabHasACategoryAndFlatGroupingToggleWithCategoryVisibleByDefault() {
+
+        MissionContext context = new MissionContext(new Mission(UUID.randomUUID(), "Test", "Test", Map.of()));
+        context.getExecutionState().addFinding(
+                new com.aegis.model.finding.Finding(com.aegis.model.finding.FindingSeverity.CRITICAL,
+                        "CRASH: tab crashed", "https://example.com", Instant.now()));
+
+        String html = generator.generate(context, MissionStatus.FAILED);
+
+        assertTrue(html.contains("data-group=\"category\" class=\"active\""));
+        assertTrue(html.contains("data-group=\"flat\""));
+        assertTrue(html.contains("data-group-view=\"category\">"));
+        assertTrue(html.contains("data-group-view=\"flat\" style=\"display:none\">"));
+    }
+
+    @Test
+    void showsIndividualOccurrencesForAClusterWithMoreThanOneFinding() {
+
+        MissionContext context = new MissionContext(new Mission(UUID.randomUUID(), "Test", "Test", Map.of()));
+        context.getExecutionState().addFinding(new com.aegis.model.finding.Finding(
+                com.aegis.model.finding.FindingSeverity.MEDIUM, "TIMEOUT: request to item 1 failed", "https://example.com/a", Instant.now()));
+        context.getExecutionState().addFinding(new com.aegis.model.finding.Finding(
+                com.aegis.model.finding.FindingSeverity.MEDIUM, "TIMEOUT: request to item 2 failed", "https://example.com/b", Instant.now()));
+        context.getExecutionState().addFinding(new com.aegis.model.finding.Finding(
+                com.aegis.model.finding.FindingSeverity.MEDIUM, "TIMEOUT: request to item 3 failed", "https://example.com/c", Instant.now()));
+
+        String html = generator.generate(context, MissionStatus.FAILED);
+
+        assertTrue(html.contains("<details class=\"cluster-occurrences\"><summary>Show 3 individual occurrences</summary>"));
+        assertTrue(html.contains("request to item 1 failed"));
+        assertTrue(html.contains("request to item 2 failed"));
+        assertTrue(html.contains("request to item 3 failed"));
+    }
+
+    @Test
+    void omitsTheOccurrencesDetailForAClusterWithOnlyOneFinding() {
+
+        MissionContext context = new MissionContext(new Mission(UUID.randomUUID(), "Test", "Test", Map.of()));
+        context.getExecutionState().addFinding(new com.aegis.model.finding.Finding(
+                com.aegis.model.finding.FindingSeverity.CRITICAL, "CRASH: tab crashed", "https://example.com", Instant.now()));
+
+        String html = generator.generate(context, MissionStatus.FAILED);
+
+        // The CSS block itself mentions the "cluster-occurrences" class name
+        // (see css()'s .cluster-occurrences rules), so a bare substring check
+        // would pass even with no such element rendered — check for the
+        // actual opening tag instead.
+        assertFalse(html.contains("<details class=\"cluster-occurrences\">"));
+    }
+
+    @Test
+    void noLongerRendersAStandaloneFindingsSection() {
+
+        MissionContext context = new MissionContext(new Mission(UUID.randomUUID(), "Test", "Test", Map.of()));
+        context.getExecutionState().addFinding(new com.aegis.model.finding.Finding(
+                com.aegis.model.finding.FindingSeverity.CRITICAL, "CRASH: tab crashed", "https://example.com", Instant.now()));
+
+        String html = generator.generate(context, MissionStatus.FAILED);
+
+        assertFalse(html.contains("id=\"findings\""));
+        assertFalse(html.contains("Findings (most severe first)"));
+    }
+
+    @Test
+    void graphViewToggleDefaultsToPathView() {
+
+        String html = generator.generate(twoStateContext(), MissionStatus.SUCCESS);
+
+        assertTrue(html.contains("data-view=\"path\" class=\"active\""));
+        assertTrue(html.contains("data-graph-view=\"path\">"));
+        assertTrue(html.contains("data-graph-view=\"graph\" style=\"display:none\">"));
+    }
+
+    @Test
+    void pathViewRendersRealDisplayNamesInVisitOrderWithARevisitBadge() {
+
+        MissionContext context = new MissionContext(new Mission(UUID.randomUUID(), "Test", "Test", Map.of()));
+        context.getExecutionState().setCurrentObservation(observation("https://example.com/login", "Login", "login-button"));
+        context.getExecutionState().addAction(click("login-button"));
+        context.getExecutionState().setCurrentObservation(observation("https://example.com/login", "Login", "login-button"));
+        context.getExecutionState().addAction(click("login-button"));
+        context.getExecutionState().setCurrentObservation(observation("https://example.com/dashboard", "Dashboard", "logout-link"));
+
+        String html = generator.generate(context, MissionStatus.SUCCESS);
+
+        int pathViewIndex = html.indexOf("data-graph-view=\"path\"");
+        int graphViewIndex = html.indexOf("data-graph-view=\"graph\"");
+        String pathViewHtml = html.substring(pathViewIndex, graphViewIndex);
+
+        assertTrue(pathViewHtml.contains("path-step-name\">Login<"));
+        assertTrue(pathViewHtml.contains("path-step-name\">Dashboard<"));
+        assertTrue(pathViewHtml.contains("visit-badge\">×2<"));
+
+        // Only the revisited Login step gets a badge — Dashboard was visited once.
+        int visitBadgeCount = pathViewHtml.split("visit-badge", -1).length - 1;
+        assertEquals(1, visitBadgeCount);
+    }
+
+    @Test
+    void pathViewTagsStepsThatAreParkOfAMatchedDeclaredJourney() {
+
+        MissionContext context = twoStateContext();
+
+        KnowledgeConfig config = new KnowledgeConfig(1, List.of(
+                new KnowledgeConfig.NodeConfig("*/login*", "login", "Login Screen", null, List.of(), Map.of()),
+                new KnowledgeConfig.NodeConfig("*/dashboard*", "dashboard", "Dashboard Screen", null, List.of(), Map.of())
+        ), List.of(),
+                List.of(new KnowledgeConfig.JourneyDefinitionConfig(
+                        "onboarding", "Onboarding", List.of("login", "dashboard"), "desc", Map.of(), null)),
+                null);
+
+        MissionReportData data = MissionReportData.from(
+                context, MissionStatus.SUCCESS, new RuleBasedBugExplainer(), new RuleBasedRecommendationEngine(),
+                new RuleBasedMissionPlanner().plan(context.getMission()), List.of(), List.of(), config);
+
+        String html = generator.generate(data);
+
+        int pathViewIndex = html.indexOf("data-graph-view=\"path\"");
+        int graphViewIndex = html.indexOf("data-graph-view=\"graph\"");
+        String pathViewHtml = html.substring(pathViewIndex, graphViewIndex);
+
+        assertTrue(pathViewHtml.contains("journey-tag"));
+        assertTrue(pathViewHtml.contains("Onboarding"));
+    }
+
+    @Test
+    void graphViewUsesRealDisplayNamesAndCollapsesSelfLoopsIntoABadgeInsteadOfACurve() {
+
+        // An edge is only recorded for a (state-before, action, state-after)
+        // triple, so a self-loop transition needs the *following*
+        // observation too — three observations here, not two, to produce
+        // two complete login-to-login transitions.
+        MissionContext context = new MissionContext(new Mission(UUID.randomUUID(), "Test", "Test", Map.of()));
+        context.getExecutionState().setCurrentObservation(observation("https://example.com/login", "Login", "login-button"));
+        context.getExecutionState().addAction(click("login-button"));
+        context.getExecutionState().setCurrentObservation(observation("https://example.com/login", "Login", "login-button"));
+        context.getExecutionState().addAction(click("login-button"));
+        context.getExecutionState().setCurrentObservation(observation("https://example.com/login", "Login", "login-button"));
+
+        String html = generator.generate(context, MissionStatus.SUCCESS);
+
+        int graphViewIndex = html.indexOf("data-graph-view=\"graph\"");
+        String graphViewHtml = html.substring(graphViewIndex);
+
+        assertTrue(graphViewHtml.contains("node-label\">Login<"));
+        assertTrue(graphViewHtml.contains("self-loop-badge\">×2<"));
+        assertFalse(graphViewHtml.contains("class=\"edge-line self-loop\""));
     }
 
     private Observation labeledObservation(String url, String pageTitle, String buttonText) {
@@ -183,6 +493,10 @@ class HtmlExplainabilityReportGeneratorTest {
     private Observation observation(String url, String pageTitle, String elementLocator) {
         List<ElementInfo> elements = List.of(new ElementInfo("button", null, null, null, "button", null, true, true, elementLocator));
         return new Observation(url, pageTitle, elements, elements, List.of(), List.of(), List.of(), Instant.now());
+    }
+
+    private Action typeAction(String target, String value) {
+        return new Action(UUID.randomUUID(), ActionType.TYPE, target, value, "test", 0.85, "test", Duration.ofSeconds(5), Instant.now(), "input");
     }
 
     private Action click(String target) {

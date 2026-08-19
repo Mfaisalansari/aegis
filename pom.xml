@@ -15,6 +15,7 @@
         <module>aegis-core</module>
         <module>aegis-api</module>
         <module>aegis-cli</module>
+        <module>aegis-web</module>
         <module>aegis-launcher</module>
         <module>samples</module>
         <module>examples</module>

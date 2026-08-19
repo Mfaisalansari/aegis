@@ -21,12 +21,7 @@ public class ActionScorerRegistry {
 
     public ActionScorer resolve(MissionContext context) {
 
-        String requested = context.getMission().parameter(PARAMETER_KEY);
-
-        String key = (requested == null || requested.isBlank())
-                ? DEFAULT_STRATEGY
-                : requested;
-
+        String key = resolveKey(context);
         ActionScorer scorer = strategies.get(key);
 
         if (scorer == null) {
@@ -34,5 +29,15 @@ public class ActionScorerRegistry {
         }
 
         return scorer;
+    }
+
+    /** The strategy key {@link #resolve(MissionContext)} would use — exposed so callers that already hold the resolved {@link ActionScorer} can still record which key produced it (e.g. for {@code ReasoningStep.strategy()}). */
+    public String resolveKey(MissionContext context) {
+
+        String requested = context.getMission().parameter(PARAMETER_KEY);
+
+        return (requested == null || requested.isBlank())
+                ? DEFAULT_STRATEGY
+                : requested;
     }
 }

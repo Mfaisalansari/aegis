@@ -32,11 +32,35 @@ final class LocatorHealer {
     private static final Pattern NAME = Pattern.compile("^\\[name='(.*)'\\]$");
     private static final Pattern NTH_MATCH = Pattern.compile("^:nth-match\\(([a-zA-Z0-9]+),\\s*(\\d+)\\)$");
 
+    /** Mirrors {@code PlaywrightBrowser.FRAME_PREFIX} — kept separate since this class has no Playwright dependency. */
+    private static final Pattern FRAME_PREFIX = Pattern.compile("^(frame:\\d+>)(.*)$", Pattern.DOTALL);
+
     private LocatorHealer() {
     }
 
-    /** Candidates to try, in preference order. Empty if the locator isn't a shape this class recognizes. */
+    /**
+     * Candidates to try, in preference order. Empty if the locator isn't a
+     * shape this class recognizes. A {@code frame:N>} prefix (see {@code
+     * PlaywrightBrowser}'s iframe support) is stripped before healing and
+     * reattached to every candidate returned — the three shapes below never
+     * need to know frames exist at all.
+     */
     static List<String> candidatesFor(String locator) {
+
+        Matcher framePrefix = FRAME_PREFIX.matcher(locator);
+        String prefix = framePrefix.matches() ? framePrefix.group(1) : "";
+        String bare = framePrefix.matches() ? framePrefix.group(2) : locator;
+
+        List<String> bareCandidates = candidatesForBare(bare);
+
+        if (prefix.isEmpty()) {
+            return bareCandidates;
+        }
+
+        return bareCandidates.stream().map(candidate -> prefix + candidate).toList();
+    }
+
+    private static List<String> candidatesForBare(String locator) {
 
         Matcher id = ID.matcher(locator);
         if (id.matches()) {

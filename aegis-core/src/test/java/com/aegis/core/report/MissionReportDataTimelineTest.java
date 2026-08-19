@@ -81,7 +81,7 @@ class MissionReportDataTimelineTest {
 
         CandidateAction candidate = new CandidateAction(type("#a"), 0.9, "test reasoning");
 
-        context.getExecutionState().addReasoningStep(new ReasoningStep(1, List.of(candidate), candidate, Instant.now()));
+        context.getExecutionState().addReasoningStep(new ReasoningStep(1, List.of(candidate), candidate, Instant.now(), "greedy"));
 
         MissionReportData data = MissionReportData.from(context, MissionStatus.SUCCESS);
 
@@ -202,8 +202,8 @@ class MissionReportDataTimelineTest {
         CandidateAction c1 = new CandidateAction(type("#a"), 0.8, "test");
         CandidateAction c2 = new CandidateAction(type("#b"), 0.6, "test");
 
-        context.getExecutionState().addReasoningStep(new ReasoningStep(1, List.of(c1), c1, Instant.now()));
-        context.getExecutionState().addReasoningStep(new ReasoningStep(2, List.of(c2), c2, Instant.now()));
+        context.getExecutionState().addReasoningStep(new ReasoningStep(1, List.of(c1), c1, Instant.now(), "greedy"));
+        context.getExecutionState().addReasoningStep(new ReasoningStep(2, List.of(c2), c2, Instant.now(), "greedy"));
 
         MissionReportData data = MissionReportData.from(context, MissionStatus.SUCCESS);
 
