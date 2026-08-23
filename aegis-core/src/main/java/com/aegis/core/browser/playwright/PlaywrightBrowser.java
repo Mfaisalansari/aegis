@@ -47,9 +47,24 @@ public class PlaywrightBrowser implements Browser {
     private final List<AnomalySignal> anomalies = new CopyOnWriteArrayList<>();
     private final BrowserConfig config;
 
+    /**
+     * Bounded number of actions the mission's own reasoning loop gets to
+     * spend on a same-domain tab opened mid-mission (see {@link
+     * #handleNewPage}) before this class transparently switches back to
+     * the parent tab. A defensible starting default, not tuned against
+     * real usage — same discipline as every other adjustable constant in
+     * this codebase (e.g. {@code ExperienceScoreCatalogProvider}'s
+     * severity weights).
+     */
+    private static final int CHILD_TAB_ACTION_BUDGET = 3;
+
     private Playwright playwright;
     private com.microsoft.playwright.Browser browser;
     private Page page;
+
+    /** Non-null exactly while {@link #page} is a same-domain child tab being explored — the tab to return to once {@link #childTabActionsRemaining} runs out. */
+    private Page parentPage;
+    private int childTabActionsRemaining;
 
     /** Set by applySession() when a session carries storage data — applied after the mission's first real navigation, see navigate(). */
     private AuthenticatedSession pendingStorageSession;
@@ -75,6 +90,7 @@ public class PlaywrightBrowser implements Browser {
         page = browser.newPage();
 
         registerAnomalyListeners();
+        page.context().onPage(this::handleNewPage);
     }
 
     private BrowserType engineFor(String type) {
@@ -150,6 +166,7 @@ public class PlaywrightBrowser implements Browser {
         page = context.pages().isEmpty() ? context.newPage() : context.pages().get(0);
 
         registerAnomalyListeners();
+        context.onPage(this::handleNewPage);
     }
 
     private void registerAnomalyListeners() {
@@ -204,6 +221,94 @@ public class PlaywrightBrowser implements Browser {
                 dialog.dismiss();
             }
         });
+    }
+
+    /**
+     * Fires whenever ANY action opens a new tab/window in this browser
+     * context (e.g. a {@code target="_blank"} link) — before this, that
+     * tab was never tracked at all: {@link #page} kept pointing at the
+     * original tab, so the new one was invisible to the Observer and just
+     * leaked as an orphaned process for the rest of the mission.
+     *
+     * Same-origin tabs are genuinely part of the app under test (a "view
+     * invoice" or "open in new tab" link, say) — folding those pages'
+     * observations into the same mission/WorldModel is correct, not a
+     * corruption, so this actually switches {@link #page} to the new tab
+     * and lets the mission's own normal reasoning loop drive real
+     * interaction there, same as any other page, for {@link
+     * #CHILD_TAB_ACTION_BUDGET} actions (see {@link
+     * #consumeChildTabBudgetIfActive}) before automatically returning to
+     * the parent tab and closing the child. Cross-origin tabs (e.g. a
+     * link out to a payment processor or an unrelated site) aren't part
+     * of the app under test — those are closed immediately with no
+     * exploration, and the parent tab is never interrupted.
+     *
+     * If a child tab is already being explored when another new page
+     * opens, the new one is closed outright rather than nesting — this
+     * class tracks at most one level of "current tab", not a stack.
+     */
+    private void handleNewPage(Page newPage) {
+
+        if (parentPage != null) {
+            newPage.close();
+            return;
+        }
+
+        try {
+            newPage.waitForLoadState(LoadState.NETWORKIDLE, new Page.WaitForLoadStateOptions().setTimeout(10000));
+        } catch (Exception e) {
+            log.warn("New tab failed to settle, evaluating it anyway. URL: {}", newPage.url());
+        }
+
+        String parentHost = hostOf(page.url());
+        String childHost = hostOf(newPage.url());
+
+        if (parentHost == null || !parentHost.equals(childHost)) {
+            newPage.close();
+            return;
+        }
+
+        parentPage = page;
+        page = newPage;
+        childTabActionsRemaining = CHILD_TAB_ACTION_BUDGET;
+        registerAnomalyListeners();
+    }
+
+    /**
+     * Decrements the child-tab exploration budget after every mutating
+     * action (this is called from {@link #settle}, the single chokepoint
+     * every {@code click}/{@code type}/{@code select}/etc. already routes
+     * through) and switches back to the parent tab once it's spent. A
+     * no-op whenever {@link #page} isn't currently a child tab.
+     */
+    private void consumeChildTabBudgetIfActive() {
+
+        if (parentPage == null) {
+            return;
+        }
+
+        childTabActionsRemaining--;
+
+        if (childTabActionsRemaining <= 0) {
+
+            Page exploredTab = page;
+            page = parentPage;
+            parentPage = null;
+
+            try {
+                exploredTab.close();
+            } catch (Exception e) {
+                log.warn("Failed to close explored tab: {}", e.getMessage());
+            }
+        }
+    }
+
+    private String hostOf(String url) {
+        try {
+            return java.net.URI.create(url).getHost();
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**
@@ -501,6 +606,52 @@ public class PlaywrightBrowser implements Browser {
         } catch (Exception e) {
             log.warn("Timed out waiting for page to settle after an action. Current URL: {}", page.url());
         }
+
+        consumeChildTabBudgetIfActive();
+    }
+
+    /**
+     * {@code Locator.isVisible()} only checks CSS visibility (not {@code
+     * display:none}/{@code visibility:hidden}, has a bounding box) — it
+     * does NOT know whether something else is sitting on top of it. A
+     * background button behind an open modal overlay reports {@code
+     * isVisible()==true} even though clicking it would just hit the
+     * backdrop. This adds the same topmost-hit-test Playwright's own
+     * {@code click()} actionability check does internally (but doesn't
+     * expose as a queryable method) — {@code document.elementFromPoint}
+     * at the element's own center, checked against the element itself.
+     * Runs inside the element's own frame automatically ({@code
+     * Locator.evaluate} executes in the frame the locator belongs to),
+     * so this is correct for framed elements with no extra handling.
+     *
+     * Deliberately folded into the existing {@code visible} field on
+     * {@link ElementInfo} rather than adding a new one: {@code
+     * DefaultElementActionMapper} already skips any element where {@code
+     * !visible()} — every downstream consumer that already treats
+     * "not visible" as "not a candidate" gets modal-awareness for free,
+     * with no changes needed there.
+     */
+    private boolean isActionable(Locator element) {
+
+        if (!element.isVisible()) {
+            return false;
+        }
+
+        try {
+            return Boolean.TRUE.equals(element.evaluate("""
+                    el => {
+                        const r = el.getBoundingClientRect();
+                        const cx = r.left + r.width / 2;
+                        const cy = r.top + r.height / 2;
+                        const top = document.elementFromPoint(cx, cy);
+                        return top !== null && (top === el || el.contains(top));
+                    }
+                    """));
+        } catch (Exception e) {
+            // Detached/gone between the isVisible() check and this call —
+            // treat as not actionable, same as any other vanished element.
+            return false;
+        }
     }
 
     @Override
@@ -551,7 +702,7 @@ public class PlaywrightBrowser implements Browser {
                         text,
                         type,
                         "",
-                        button.isVisible(),
+                        isActionable(button),
                         button.isEnabled(),
                         bestLocator
                 ));
@@ -588,7 +739,7 @@ public class PlaywrightBrowser implements Browser {
                         "",
                         type,
                         safe(input.inputValue()),
-                        input.isVisible(),
+                        isActionable(input),
                         input.isEnabled(),
                         bestLocator
                 ));
@@ -625,7 +776,7 @@ public class PlaywrightBrowser implements Browser {
                         text,
                         "link",
                         "",
-                        link.isVisible(),
+                        isActionable(link),
                         link.isEnabled(),
                         bestLocator
                 ));
@@ -661,7 +812,7 @@ public class PlaywrightBrowser implements Browser {
                         "",
                         "select",
                         "",
-                        select.isVisible(),
+                        isActionable(select),
                         select.isEnabled(),
                         bestLocator
                 ));
