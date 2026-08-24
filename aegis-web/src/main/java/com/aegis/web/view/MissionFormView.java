@@ -107,6 +107,7 @@ public final class MissionFormView {
         body.append("</form>");
 
         body.append(PARSING_OVERLAY);
+        body.append(strategyHelpScript());
 
         return Layout.page("AEGIS — Run a Mission", "run", body.toString());
     }
@@ -143,7 +144,7 @@ public final class MissionFormView {
 
     private static List<String> strategyKeys() {
         return List.of("greedy", "random", "risk-based", "breadth-first", "depth-first",
-                "form-first", "navigation-first", "coverage-aware", "adaptive", "llm");
+                "form-first", "navigation-first", "coverage-aware", "adaptive", "llm", "knowledge-aware");
     }
 
     private static String strategyHelp(String selected) {
@@ -152,11 +153,70 @@ public final class MissionFormView {
 
         for (String[] entry : HelpText.STRATEGIES) {
             if (entry[0].equals(chosen)) {
-                return "<p class=\"help\"><code>" + escapeHtml(entry[0]) + "</code> &mdash; " + escapeHtml(entry[1]) + "</p>";
+                return "<p class=\"help\" id=\"strategy-help\"><code>" + escapeHtml(entry[0]) + "</code> &mdash; " + escapeHtml(entry[1]) + "</p>";
             }
         }
 
-        return "";
+        return "<p class=\"help\" id=\"strategy-help\"></p>";
+    }
+
+    /**
+     * The server only renders the description matching whatever strategy
+     * was selected on the last GET/POST — with no client-side wiring at
+     * all, picking a different option in the dropdown left the help text
+     * frozen on the old selection until a full page reload. This updates
+     * it live: the same {@link HelpText#STRATEGIES} data already used for
+     * the server-rendered initial text, re-embedded here as a small JS
+     * lookup object so no new API endpoint is needed — same "everything
+     * inline" convention {@link #PARSING_OVERLAY} already established in
+     * this file.
+     */
+    private static String strategyHelpScript() {
+
+        StringBuilder descriptions = new StringBuilder("{");
+
+        for (int i = 0; i < HelpText.STRATEGIES.length; i++) {
+            String[] entry = HelpText.STRATEGIES[i];
+            if (i > 0) {
+                descriptions.append(",");
+            }
+            descriptions.append("\"").append(jsStringLiteral(entry[0])).append("\":\"").append(jsStringLiteral(entry[1])).append("\"");
+        }
+
+        descriptions.append("}");
+
+        return "<script>\n"
+                + "(function () {\n"
+                + "    var descriptions = " + descriptions + ";\n"
+                + "    var select = document.getElementById('strategy');\n"
+                + "    var help = document.getElementById('strategy-help');\n"
+                + "    if (!select || !help) { return; }\n"
+                + "    select.addEventListener('change', function () {\n"
+                + "        var text = descriptions[select.value];\n"
+                + "        help.innerHTML = text ? '<code>' + select.value + '</code> &mdash; ' + text : '';\n"
+                + "    });\n"
+                + "})();\n"
+                + "</script>\n";
+    }
+
+    /** HTML-escapes first (this ends up in innerHTML), then JS-escapes so the result is a syntactically valid single JS string literal. */
+    private static String jsStringLiteral(String value) {
+
+        String htmlEscaped = escapeHtml(value);
+        StringBuilder out = new StringBuilder(htmlEscaped.length());
+
+        for (int i = 0; i < htmlEscaped.length(); i++) {
+            char c = htmlEscaped.charAt(i);
+            switch (c) {
+                case '\\' -> out.append("\\\\");
+                case '"' -> out.append("\\\"");
+                case '\n' -> out.append("\\n");
+                case '\r' -> out.append("\\r");
+                default -> out.append(c);
+            }
+        }
+
+        return out.toString();
     }
 
     private static String textField(String name, String label, String value, String placeholder, String help) {

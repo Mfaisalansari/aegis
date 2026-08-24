@@ -76,4 +76,49 @@ class MissionFormViewTest {
         assertTrue(nlFormOpen >= 0 && nlFormClose >= 0 && structuredFormOpen >= 0);
         assertTrue(nlFormClose < structuredFormOpen, "the NL form must close before the structured form opens");
     }
+
+    @Test
+    void everyDeclaredStrategyIsARealSelectableOption() {
+
+        String html = MissionFormView.render(MissionFormRequest.defaults(), List.of());
+
+        for (String[] entry : HelpText.STRATEGIES) {
+            assertTrue(html.contains("value=\"" + entry[0] + "\""),
+                    "strategy '" + entry[0] + "' is documented in HelpText.STRATEGIES but not a selectable <option>");
+        }
+    }
+
+    @Test
+    void strategyHelpTextHasAStableIdForClientSideUpdates() {
+
+        String html = MissionFormView.render(MissionFormRequest.defaults(), List.of());
+
+        assertTrue(html.contains("id=\"strategy-help\""));
+    }
+
+    @Test
+    void strategyChangeScriptCarriesADescriptionForEveryStrategy() {
+
+        String html = MissionFormView.render(MissionFormRequest.defaults(), List.of());
+
+        int scriptStart = html.indexOf("addEventListener('change'");
+        assertTrue(scriptStart >= 0, "no client-side change listener found — the help text would never update on selection");
+
+        for (String[] entry : HelpText.STRATEGIES) {
+            assertTrue(html.contains("\"" + entry[0] + "\":\""), "no JS description entry for strategy '" + entry[0] + "'");
+        }
+    }
+
+    @Test
+    void strategyDescriptionsInTheScriptAreHtmlEscapedBeforeJsEscaping() {
+
+        // "risk-based"'s and "coverage-aware"'s descriptions contain literal " — " em-dashes and
+        // apostrophes elsewhere in HelpText.STRATEGIES ("knowledge-aware": "run's record") — confirms
+        // HTML-entity escaping (') runs before the string is embedded as a JS literal, so later
+        // assigning it via innerHTML renders correctly instead of breaking the JS syntax.
+        String html = MissionFormView.render(MissionFormRequest.defaults(), List.of());
+
+        assertTrue(html.contains("run&#39;s record"));
+        assertFalse(html.contains("run's record"));
+    }
 }
