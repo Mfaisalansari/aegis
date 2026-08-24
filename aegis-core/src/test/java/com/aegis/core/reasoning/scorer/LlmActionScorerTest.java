@@ -15,6 +15,8 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class LlmActionScorerTest {
 
@@ -107,8 +109,40 @@ class LlmActionScorerTest {
         assertEquals("#a", chosen.action().target());
     }
 
+    @Test
+    void includesAppContextInThePromptWhenTheMissionParameterIsSet() {
+
+        MissionContext withContext = new MissionContext(
+                new Mission(UUID.randomUUID(), "Test", "Test", Map.of("appContext", "This is a demo bank app.")));
+
+        StringBuilder capturedPrompt = new StringBuilder();
+        LlmActionScorer scorer = new LlmActionScorer(capturingClient(capturedPrompt, "{\"index\": 0, \"reasoning\": \"ok\"}"));
+
+        scorer.choose(withContext, List.of(candidate(ActionType.CLICK, "#a", 0.5)));
+
+        assertTrue(capturedPrompt.toString().contains("Context about this application:\nThis is a demo bank app."));
+    }
+
+    @Test
+    void omitsTheContextSectionWhenNoAppContextParameterIsSet() {
+
+        StringBuilder capturedPrompt = new StringBuilder();
+        LlmActionScorer scorer = new LlmActionScorer(capturingClient(capturedPrompt, "{\"index\": 0, \"reasoning\": \"ok\"}"));
+
+        scorer.choose(context, List.of(candidate(ActionType.CLICK, "#a", 0.5)));
+
+        assertFalse(capturedPrompt.toString().contains("Context about this application"));
+    }
+
     private LlmChatClient stubClient(String response) {
         return (systemPrompt, userPrompt) -> response;
+    }
+
+    private LlmChatClient capturingClient(StringBuilder capturedUserPrompt, String response) {
+        return (systemPrompt, userPrompt) -> {
+            capturedUserPrompt.append(userPrompt);
+            return response;
+        };
     }
 
     private CandidateAction candidate(ActionType type, String target, double confidence) {

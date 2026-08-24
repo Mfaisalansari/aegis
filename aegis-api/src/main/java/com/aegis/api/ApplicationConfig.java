@@ -4,11 +4,18 @@ package com.aegis.api;
  * The "application" section of an {@code application.yml} — declarative
  * facts about the app under test. Maps directly onto existing mission
  * parameters (see USAGE.md §4); nothing here is new capability.
+ *
+ * {@code contextFile} is the one exception: unlike every other field, it's
+ * a path, not the value itself — {@link MissionBuilder} is what actually
+ * reads it (see {@code MissionBuilder#appContext(String)}), gracefully
+ * degrading to no context if the file is missing/unreadable rather than
+ * failing config load. Kept as a path here, not resolved text, so {@link
+ * #merge} stays exactly as mechanical as every other field.
  */
-public record ApplicationConfig(String baseUrl, String username, String password, String successUrlContains) {
+public record ApplicationConfig(String baseUrl, String username, String password, String successUrlContains, String contextFile) {
 
     public static ApplicationConfig defaults() {
-        return new ApplicationConfig(null, null, null, null);
+        return new ApplicationConfig(null, null, null, null, null);
     }
 
     /**
@@ -28,7 +35,8 @@ public record ApplicationConfig(String baseUrl, String username, String password
                 override.baseUrl() != null ? override.baseUrl() : base.baseUrl(),
                 override.username() != null ? override.username() : base.username(),
                 override.password() != null ? override.password() : base.password(),
-                override.successUrlContains() != null ? override.successUrlContains() : base.successUrlContains()
+                override.successUrlContains() != null ? override.successUrlContains() : base.successUrlContains(),
+                override.contextFile() != null ? override.contextFile() : base.contextFile()
         );
     }
 }

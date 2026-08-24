@@ -12,6 +12,8 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class LlmReportSummarizerTest {
 
@@ -51,6 +53,40 @@ class LlmReportSummarizerTest {
         assertEquals("fallback text", result);
     }
 
+    @Test
+    void includesAppContextInThePromptWhenConstructedWithIt() {
+
+        StringBuilder capturedPrompt = new StringBuilder();
+        LlmReportSummarizer summarizer = new LlmReportSummarizer(
+                capturingClient(capturedPrompt, "summary"), "This is a demo bank app.");
+
+        summarize(summarizer);
+
+        assertTrue(capturedPrompt.toString().contains("Context about this application:\nThis is a demo bank app."));
+    }
+
+    @Test
+    void theOriginalOneArgConstructorOmitsTheContextSectionEntirely() {
+
+        StringBuilder capturedPrompt = new StringBuilder();
+        LlmReportSummarizer summarizer = new LlmReportSummarizer(capturingClient(capturedPrompt, "summary"));
+
+        summarize(summarizer);
+
+        assertFalse(capturedPrompt.toString().contains("Context about this application"));
+    }
+
+    @Test
+    void theTwoArgConstructorWithABlankContextAlsoOmitsTheSection() {
+
+        StringBuilder capturedPrompt = new StringBuilder();
+        LlmReportSummarizer summarizer = new LlmReportSummarizer(capturingClient(capturedPrompt, "summary"), "   ");
+
+        summarize(summarizer);
+
+        assertFalse(capturedPrompt.toString().contains("Context about this application"));
+    }
+
     private String summarize(LlmReportSummarizer summarizer) {
         return summarizer.summarize(
                 "Mission", "Goal", MissionStatus.SUCCESS,
@@ -60,5 +96,12 @@ class LlmReportSummarizerTest {
 
     private LlmChatClient stubClient(String response) {
         return (systemPrompt, userPrompt) -> response;
+    }
+
+    private LlmChatClient capturingClient(StringBuilder capturedUserPrompt, String response) {
+        return (systemPrompt, userPrompt) -> {
+            capturedUserPrompt.append(userPrompt);
+            return response;
+        };
     }
 }

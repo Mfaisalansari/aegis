@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class LlmMissionPlannerTest {
@@ -85,7 +86,39 @@ class LlmMissionPlannerTest {
         assertTrue(plan.steps().stream().anyMatch(step -> step.contains("https://www.saucedemo.com/")));
     }
 
+    @Test
+    void includesAppContextInThePromptWhenTheMissionParameterIsSet() {
+
+        Mission withContext = new Mission(UUID.randomUUID(), "Test mission", "Log in and check inventory",
+                Map.of("baseUrl", "https://www.saucedemo.com/", "appContext", "This is a demo bank app."));
+
+        StringBuilder capturedPrompt = new StringBuilder();
+        LlmMissionPlanner planner = new LlmMissionPlanner(capturingClient(capturedPrompt, "[\"Step one\"]"));
+
+        planner.plan(withContext);
+
+        assertTrue(capturedPrompt.toString().contains("Context about this application:\nThis is a demo bank app."));
+    }
+
+    @Test
+    void omitsTheContextSectionWhenNoAppContextParameterIsSet() {
+
+        StringBuilder capturedPrompt = new StringBuilder();
+        LlmMissionPlanner planner = new LlmMissionPlanner(capturingClient(capturedPrompt, "[\"Step one\"]"));
+
+        planner.plan(mission);
+
+        assertFalse(capturedPrompt.toString().contains("Context about this application"));
+    }
+
     private LlmChatClient stubClient(String response) {
         return (systemPrompt, userPrompt) -> response;
+    }
+
+    private LlmChatClient capturingClient(StringBuilder capturedUserPrompt, String response) {
+        return (systemPrompt, userPrompt) -> {
+            capturedUserPrompt.append(userPrompt);
+            return response;
+        };
     }
 }

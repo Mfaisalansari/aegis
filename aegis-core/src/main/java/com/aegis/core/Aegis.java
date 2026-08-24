@@ -100,7 +100,7 @@ public final class Aegis {
                 : new RuleBasedRecommendationEngine();
 
         ReportSummarizer summarizer = plainLanguageSummaryEnabled()
-                ? new LlmReportSummarizer(OpenAiCompatibleChatClient.fromEnvironment())
+                ? new LlmReportSummarizer(OpenAiCompatibleChatClient.fromEnvironment(), mission.parameter("appContext"))
                 : new RuleBasedReportSummarizer();
 
         // Built once and shared by the 3 built-in generators and every

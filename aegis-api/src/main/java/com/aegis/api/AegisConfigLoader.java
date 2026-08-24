@@ -96,7 +96,8 @@ public final class AegisConfigLoader {
                 string(section, "baseUrl"),
                 resolveCredential(string(section, "username"), credentialProviders),
                 resolveCredential(string(section, "password"), credentialProviders),
-                string(section, "successUrlContains")
+                string(section, "successUrlContains"),
+                string(section, "contextFile")
         );
     }
 
