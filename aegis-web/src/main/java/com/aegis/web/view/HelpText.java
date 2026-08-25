@@ -40,7 +40,8 @@ public final class HelpText {
             {"navigation-first", "Behaves like a user getting oriented — clicking through menus/links to see what's there before committing to a task. Prefers following links over local page actions."},
             {"coverage-aware", "Behaves like a completionist tester deliberately trying to visit every screen at least once, not just the ones on the way to the goal. Graph-aware: rewards a candidate confirmed by history to lead somewhere not yet visited."},
             {"adaptive", "Behaves like a pragmatic user: takes the obvious path first, and only starts exploring more broadly after getting stuck for a while. Uses greedy normally, switches to coverage-aware after 3 stagnant iterations, switches back automatically. The only strategy that changes mid-mission on its own."},
-            {"llm", "Behaves like an experienced human tester weighing the whole page in context, rather than following one fixed rule. A real language model picks among the already-validated candidates. Falls back to greedy on any failure."}
+            {"llm", "Behaves like an experienced human tester weighing the whole page in context, rather than following one fixed rule. A real language model picks among the already-validated candidates. Falls back to greedy on any failure."},
+            {"knowledge-aware", "Behaves like a tester briefed on what every previous run already covered, deliberately steering toward what none of them reached yet. Reads a persisted, cross-run coverage record (opt-in — nothing writes to it automatically); rewards a candidate whose destination this run has resolved but no prior run's record contains."}
     };
 
     /** The 8 AEGIS_LLM_* env vars — never render AEGIS_LLM_API_KEY's actual value, only whether it's set (same discipline as `aegis doctor`). */
