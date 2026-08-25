@@ -422,8 +422,27 @@ public class PlaywrightBrowser implements Browser {
         return drained;
     }
 
+    /**
+     * {@code settle()} (used after every action) only waits for
+     * DOMCONTENTLOADED, deliberately — see its own Javadoc. That's fine
+     * for the next observation/action, but a screenshot taken right after
+     * can catch an SPA still mid-render: the HTML parsed, but the JS that
+     * actually paints the page hasn't run yet, so the capture comes back
+     * blank/white. A bounded NETWORKIDLE wait right before reading pixels
+     * gives that render a chance to finish — returns immediately if the
+     * page's already quiet, and gives up after 1s rather than hanging a
+     * screenshot on a page with a persistent websocket/long-poll that
+     * never truly goes idle.
+     */
     @Override
     public byte[] screenshotPng() {
+
+        try {
+            page.waitForLoadState(LoadState.NETWORKIDLE, new Page.WaitForLoadStateOptions().setTimeout(1000));
+        } catch (Exception e) {
+            log.debug("Page didn't reach network-idle before screenshot; capturing anyway: {}", e.getMessage());
+        }
+
         return page.screenshot();
     }
 
