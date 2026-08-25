@@ -1,6 +1,8 @@
 package com.aegis.web.handler;
 
 import com.aegis.core.AegisReport;
+import com.aegis.core.report.MissionReportData;
+import com.aegis.reporting.RedesignedMissionReportGenerator;
 import com.aegis.web.mission.MissionJob;
 import com.aegis.web.mission.MissionJobStore;
 import com.aegis.web.view.MissionStatusView;
@@ -9,6 +11,7 @@ import com.sun.net.httpserver.HttpHandler;
 
 import java.io.IOException;
 import java.util.Optional;
+import java.util.function.Function;
 
 /**
  * {@code GET /missions/*} — the JDK's {@code HttpServer} only does
@@ -18,6 +21,13 @@ import java.util.Optional;
  * {@code /missions/{id}/report[.json|.txt]} (view/download, straight
  * from the in-memory {@link AegisReport} — never re-read from disk by a
  * request-supplied path, so there's no path-traversal surface).
+ *
+ * {@code /missions/{id}/report/redesigned} is the one exception to
+ * "straight from the in-memory AegisReport": {@link AegisReport} only
+ * ever carries the frozen {@code HtmlExplainabilityReportGenerator}'s
+ * HTML (baked in at {@code Aegis.run(...)} time), so the redesigned
+ * report is instead built fresh, on request, from the same {@code
+ * MissionResult} the job already holds — see {@link #redesignedHtmlReport}.
  */
 public final class MissionsHandler implements HttpHandler {
 
@@ -64,6 +74,7 @@ public final class MissionsHandler implements HttpHandler {
             case "report" -> handleReport(exchange, job, "text/html; charset=utf-8", AegisReport::htmlReport, "html", download);
             case "report.json" -> handleReport(exchange, job, "application/json; charset=utf-8", AegisReport::jsonReport, "json", download);
             case "report.txt" -> handleReport(exchange, job, "text/plain; charset=utf-8", AegisReport::textReport, "txt", download);
+            case "report/redesigned" -> handleReport(exchange, job, "text/html; charset=utf-8", MissionsHandler::redesignedHtmlReport, "html", download);
             default -> HandlerSupport.sendText(exchange, 404, "Not Found");
         }
     }
@@ -79,7 +90,7 @@ public final class MissionsHandler implements HttpHandler {
 
     private void handleReport(
             HttpExchange exchange, MissionJob job, String contentType,
-            java.util.function.Function<AegisReport, String> extractor, String extension, boolean download) throws IOException {
+            Function<AegisReport, String> extractor, String extension, boolean download) throws IOException {
 
         if (job.state() != MissionJob.State.DONE) {
             HandlerSupport.sendText(exchange, 404, "Report not available — mission has not finished successfully.");
@@ -90,5 +101,16 @@ public final class MissionsHandler implements HttpHandler {
         String filename = download ? "aegis-report-" + job.id() + "." + extension : null;
 
         HandlerSupport.sendFile(exchange, 200, contentType, content, filename);
+    }
+
+    /**
+     * Built on demand rather than at mission-run time — {@link AegisReport}
+     * only ever carries the frozen generator's HTML, so there's nothing to
+     * extract here. {@code MissionResult} (context + status) is all {@link
+     * RedesignedMissionReportGenerator} needs, and the job already holds it.
+     */
+    private static String redesignedHtmlReport(AegisReport report) {
+        return new RedesignedMissionReportGenerator().generate(
+                MissionReportData.from(report.missionResult().context(), report.missionResult().status()));
     }
 }

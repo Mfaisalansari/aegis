@@ -25,6 +25,12 @@
         </dependency>
 
         <dependency>
+            <groupId>com.aegis</groupId>
+            <artifactId>aegis-reporting</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>

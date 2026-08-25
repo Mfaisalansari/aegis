@@ -76,6 +76,7 @@ public final class MissionStatusView {
 
                 body.append("<div class=\"card\"><h3>Report</h3>");
                 body.append("<a class=\"btn-secondary\" href=\"/missions/").append(job.id()).append("/report\">View HTML</a>");
+                body.append("<a class=\"btn-secondary\" href=\"/missions/").append(job.id()).append("/report/redesigned\">View HTML (redesigned)</a>");
                 body.append("<a class=\"btn-secondary\" href=\"/missions/").append(job.id()).append("/report?download=1\">Download HTML</a>");
                 body.append("<a class=\"btn-secondary\" href=\"/missions/").append(job.id()).append("/report.json?download=1\">Download JSON</a>");
                 body.append("<a class=\"btn-secondary\" href=\"/missions/").append(job.id()).append("/report.txt?download=1\">Download Text</a>");
