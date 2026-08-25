@@ -197,6 +197,36 @@ class SelfHealingBrowserTest {
     }
 
     @Test
+    void throttlesSuccessfulCapturesToAtMostOnePerMinInterval() {
+
+        RecordingBrowser fake = new RecordingBrowser();
+        fake.screenshotBytes = new byte[]{1, 2, 3};
+
+        SelfHealingBrowser browser =
+                new SelfHealingBrowser(fake, NO_DELAY, RETRY_TIMEOUT, Duration.ofSeconds(10), NO_DELAY);
+        browser.click("[id='a']");
+        browser.click("[id='b']");
+
+        assertEquals(1, browser.capturedScreenshots().size());
+    }
+
+    @Test
+    void aFailingActionAlwaysCapturesEvenWithinTheThrottleWindow() {
+
+        RecordingBrowser fake = new RecordingBrowser();
+        fake.screenshotBytes = new byte[]{1, 2, 3};
+
+        SelfHealingBrowser browser =
+                new SelfHealingBrowser(fake, NO_DELAY, RETRY_TIMEOUT, Duration.ofSeconds(10), NO_DELAY);
+        browser.click("[id='a']");
+
+        fake.clickShouldFail = locator -> true;
+        assertThrows(RuntimeException.class, () -> browser.click("text=Sign in"));
+
+        assertEquals(2, browser.capturedScreenshots().size());
+    }
+
+    @Test
     void aScreenshotCaptureFailureDoesNotMaskTheActionsOwnOutcome() {
 
         RecordingBrowser fake = new RecordingBrowser();

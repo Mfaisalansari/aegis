@@ -41,9 +41,19 @@ import java.util.List;
  * repeating it verbatim on every retry would make a genuinely-broken
  * locator stall the mission for minutes instead of seconds.
  *
- * Also captures one screenshot after every element action and navigation
- * call (success or failure), available via {@link #capturedScreenshots()}
- * — this is what backs the Mission Timeline's screenshot hooks.
+ * Also captures a screenshot after element actions and navigation calls,
+ * available via {@link #capturedScreenshots()} — this is what backs the
+ * Mission Timeline's screenshot hooks. Throttled to at most one capture
+ * per {@link #minScreenshotInterval} (a rapid run of actions on an
+ * already-settled page doesn't need a new frame for each one, and
+ * skipping the redundant ones is what actually cuts down the visible
+ * flicker of capturing constantly) — except a failing action always
+ * gets captured regardless, since that evidence is exactly what's
+ * useful for diagnosing what happened. Each capture also waits
+ * {@link #screenshotSettleDelay} first: {@code settle()} above only
+ * waits for DOMCONTENTLOADED, which can fire before the page has
+ * actually painted anything, so capturing immediately after it risks a
+ * blank frame.
  */
 public final class SelfHealingBrowser implements Browser {
 
@@ -51,21 +61,36 @@ public final class SelfHealingBrowser implements Browser {
 
     private static final Duration DEFAULT_RETRY_DELAY = Duration.ofMillis(300);
     private static final Duration DEFAULT_RETRY_TIMEOUT = Duration.ofSeconds(3);
+    private static final Duration DEFAULT_MIN_SCREENSHOT_INTERVAL = Duration.ofMillis(800);
+    private static final Duration DEFAULT_SCREENSHOT_SETTLE_DELAY = Duration.ofMillis(150);
 
     private final Browser delegate;
     private final Duration retryDelay;
     private final Duration retryTimeout;
+    private final Duration minScreenshotInterval;
+    private final Duration screenshotSettleDelay;
     private final List<ScreenshotSample> screenshots = new ArrayList<>();
+    private Instant lastScreenshotAt = Instant.EPOCH;
 
     public SelfHealingBrowser(Browser delegate) {
-        this(delegate, DEFAULT_RETRY_DELAY, DEFAULT_RETRY_TIMEOUT);
+        this(delegate, DEFAULT_RETRY_DELAY, DEFAULT_RETRY_TIMEOUT,
+                DEFAULT_MIN_SCREENSHOT_INTERVAL, DEFAULT_SCREENSHOT_SETTLE_DELAY);
     }
 
     /** Widened for tests: a real delay would make retry/heal tests slow for no benefit. */
     SelfHealingBrowser(Browser delegate, Duration retryDelay, Duration retryTimeout) {
+        this(delegate, retryDelay, retryTimeout, Duration.ZERO, Duration.ZERO);
+    }
+
+    /** Widened for tests that specifically exercise screenshot throttling/settle timing. */
+    SelfHealingBrowser(
+            Browser delegate, Duration retryDelay, Duration retryTimeout,
+            Duration minScreenshotInterval, Duration screenshotSettleDelay) {
         this.delegate = delegate;
         this.retryDelay = retryDelay;
         this.retryTimeout = retryTimeout;
+        this.minScreenshotInterval = minScreenshotInterval;
+        this.screenshotSettleDelay = screenshotSettleDelay;
     }
 
     @Override
@@ -196,10 +221,14 @@ public final class SelfHealingBrowser implements Browser {
 
     private void executeElementAction(String locator, Attempt attempt, TimedAttempt timedAttempt) {
 
+        boolean failed = false;
         try {
             executeElementActionAttempts(locator, attempt, timedAttempt);
+        } catch (RuntimeException e) {
+            failed = true;
+            throw e;
         } finally {
-            captureScreenshot();
+            captureScreenshot(failed);
         }
     }
 
@@ -212,7 +241,7 @@ public final class SelfHealingBrowser implements Browser {
             log.warn("Action against '{}' failed, retrying: {}", locator, firstFailure.getMessage());
         }
 
-        sleep();
+        sleep(retryDelay);
 
         try {
             timedAttempt.run(locator, retryTimeout);
@@ -235,10 +264,14 @@ public final class SelfHealingBrowser implements Browser {
 
     private void executeNavigation(String description, Runnable attempt) {
 
+        boolean failed = false;
         try {
             executeNavigationAttempts(description, attempt);
+        } catch (RuntimeException e) {
+            failed = true;
+            throw e;
         } finally {
-            captureScreenshot();
+            captureScreenshot(failed);
         }
     }
 
@@ -251,32 +284,47 @@ public final class SelfHealingBrowser implements Browser {
             log.warn("{} failed, retrying: {}", description, firstFailure.getMessage());
         }
 
-        sleep();
+        sleep(retryDelay);
         attempt.run();
     }
 
     /**
-     * Captures one screenshot per logical action, regardless of how many
-     * retry/heal attempts it took internally, or whether it ultimately
-     * succeeded or failed — a screenshot of the failure is useful
-     * evidence too. Never lets a capture failure (e.g. the page already
-     * crashed) mask the real action's own outcome.
+     * Captures a screenshot for this action, unless it succeeded within
+     * {@link #minScreenshotInterval} of the last capture — a failure
+     * always bypasses the throttle, since a screenshot of the failure is
+     * useful evidence a routine successful action doesn't need to add to
+     * on top of a recent capture. Sleeps {@link #screenshotSettleDelay}
+     * first so a page that just reached DOMCONTENTLOADED has a moment to
+     * actually paint before its pixels are read. Never lets a capture
+     * failure (e.g. the page already crashed) mask the real action's own
+     * outcome.
      */
-    private void captureScreenshot() {
+    private void captureScreenshot(boolean forceCapture) {
+
+        if (!forceCapture && Duration.between(lastScreenshotAt, Instant.now()).compareTo(minScreenshotInterval) < 0) {
+            return;
+        }
 
         try {
+            sleep(screenshotSettleDelay);
             byte[] png = delegate.screenshotPng();
             if (png.length > 0) {
                 screenshots.add(new ScreenshotSample(Instant.now(), png));
+                lastScreenshotAt = Instant.now();
             }
         } catch (RuntimeException e) {
             log.warn("Screenshot capture failed: {}", e.getMessage());
         }
     }
 
-    private void sleep() {
+    private void sleep(Duration duration) {
+
+        if (duration.isZero() || duration.isNegative()) {
+            return;
+        }
+
         try {
-            Thread.sleep(retryDelay.toMillis());
+            Thread.sleep(duration.toMillis());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
