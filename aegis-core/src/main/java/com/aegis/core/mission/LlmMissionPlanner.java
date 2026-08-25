@@ -134,6 +134,12 @@ public class LlmMissionPlanner implements MissionPlanner {
         prompt.append("Credentials provided: ")
                 .append(mission.parameter("username") != null ? "yes" : "no").append('\n');
 
+        String appContext = mission.parameter("appContext");
+
+        if (appContext != null && !appContext.isBlank()) {
+            prompt.append("\nContext about this application:\n").append(appContext).append('\n');
+        }
+
         return prompt.toString();
     }
 }

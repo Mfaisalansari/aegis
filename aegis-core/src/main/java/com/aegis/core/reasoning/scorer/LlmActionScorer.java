@@ -128,6 +128,12 @@ public class LlmActionScorer implements ActionScorer {
             prompt.append("Success means reaching a URL containing: ").append(successMarker).append('\n');
         }
 
+        String appContext = context.getMission().parameter("appContext");
+
+        if (appContext != null && !appContext.isBlank()) {
+            prompt.append("\nContext about this application:\n").append(appContext).append('\n');
+        }
+
         List<Action> history = context.getExecutionState().getActions();
         int historyStart = Math.max(0, history.size() - 5);
 
