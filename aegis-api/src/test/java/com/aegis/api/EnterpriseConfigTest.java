@@ -14,10 +14,10 @@ class EnterpriseConfigTest {
     private final EnterpriseConfig config = new EnterpriseConfig(
             Map.of(
                     "dev", new EnvironmentProfile(
-                            new ApplicationConfig("https://dev.example.com", "dev-user", "dev-pass", "dev-success"),
+                            new ApplicationConfig("https://dev.example.com", "dev-user", "dev-pass", "dev-success", null),
                             new BrowserConfig("chromium", true)),
                     "production", new EnvironmentProfile(
-                            new ApplicationConfig("https://example.com", "prod-user", "prod-pass", "prod-success"),
+                            new ApplicationConfig("https://example.com", "prod-user", "prod-pass", "prod-success", null),
                             new BrowserConfig("chromium", true))
             ),
             Map.of(
@@ -26,7 +26,7 @@ class EnterpriseConfigTest {
                             null),
                     "full-regression", new MissionProfile(
                             new MissionConfig("Full Regression", "Thorough", "adaptive", 50, null, false, false, false),
-                            new ApplicationConfig(null, null, null, "regression-success"))
+                            new ApplicationConfig(null, null, null, "regression-success", null))
             ),
             new ReportConfig("reports")
     );

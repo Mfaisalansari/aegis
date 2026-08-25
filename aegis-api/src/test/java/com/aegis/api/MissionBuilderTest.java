@@ -6,9 +6,14 @@ import com.aegis.core.reasoning.value.InputValueResolverRegistry;
 import com.aegis.model.mission.Mission;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MissionBuilderTest {
 
@@ -96,7 +101,7 @@ class MissionBuilderTest {
     void fromConfigPopulatesEveryFieldFromAegisConfig() {
 
         AegisConfig config = new AegisConfig(
-                new ApplicationConfig("https://example.com", "bob", "secret", "done"),
+                new ApplicationConfig("https://example.com", "bob", "secret", "done", null),
                 new BrowserConfig("chromium", true),
                 new MissionConfig("My Mission", "Description", "coverage-aware", 15, "edge-case", true, true, true),
                 ReportConfig.defaults()
@@ -124,5 +129,58 @@ class MissionBuilderTest {
         Mission mission = MissionBuilder.from(AegisConfig.defaults()).build();
 
         assertNull(mission.parameter("maxIterations"));
+    }
+
+    @Test
+    void appContextReadsARealFileIntoTheAppContextParameter() throws IOException {
+
+        Path file = Files.createTempFile("aegis-context", ".md");
+        Files.writeString(file, "This app is a demo bank. The most important flow is Transfer Funds.");
+
+        Mission mission = MissionBuilder.create("Test", "Test").appContext(file.toString()).build();
+
+        assertEquals("This app is a demo bank. The most important flow is Transfer Funds.", mission.parameter("appContext"));
+    }
+
+    @Test
+    void appContextIsAbsentWhenNoPathIsGiven() {
+        Mission mission = MissionBuilder.create("Test", "Test").appContext(null).build();
+        assertNull(mission.parameter("appContext"));
+    }
+
+    @Test
+    void appContextGracefullyDegradesWhenTheFileDoesNotExist() {
+
+        Mission mission = MissionBuilder.create("Test", "Test")
+                .appContext("/no/such/file/anywhere.md")
+                .build();
+
+        assertNull(mission.parameter("appContext"));
+    }
+
+    @Test
+    void appContextTruncatesAnOverlyLongDocument() throws IOException {
+
+        Path file = Files.createTempFile("aegis-context-long", ".md");
+        Files.writeString(file, "x".repeat(MissionBuilder.MAX_APP_CONTEXT_LENGTH + 500));
+
+        Mission mission = MissionBuilder.create("Test", "Test").appContext(file.toString()).build();
+
+        assertEquals(MissionBuilder.MAX_APP_CONTEXT_LENGTH, mission.parameter("appContext").length());
+    }
+
+    @Test
+    void fromConfigReadsAppContextFromApplicationConfig() throws IOException {
+
+        Path file = Files.createTempFile("aegis-context-fromconfig", ".md");
+        Files.writeString(file, "Context from config file.");
+
+        AegisConfig config = new AegisConfig(
+                new ApplicationConfig("https://example.com", null, null, null, file.toString()),
+                BrowserConfig.defaults(), MissionConfig.defaults(), ReportConfig.defaults());
+
+        Mission mission = MissionBuilder.from(config).build();
+
+        assertTrue(mission.parameter("appContext").contains("Context from config file."));
     }
 }

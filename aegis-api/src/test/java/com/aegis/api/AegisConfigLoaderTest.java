@@ -57,6 +57,7 @@ class AegisConfigLoaderTest {
                   username: bob
                   password: secret
                   successUrlContains: done
+                  contextFile: context.md
                 browser:
                   type: firefox
                   headless: true
@@ -79,6 +80,7 @@ class AegisConfigLoaderTest {
         assertEquals("bob", config.application().username());
         assertEquals("secret", config.application().password());
         assertEquals("done", config.application().successUrlContains());
+        assertEquals("context.md", config.application().contextFile());
 
         assertEquals("firefox", config.browser().type());
         assertTrue(config.browser().headless());
