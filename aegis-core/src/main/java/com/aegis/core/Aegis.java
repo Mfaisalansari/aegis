@@ -119,7 +119,7 @@ public final class Aegis {
             pluginReports.put(renderer.name(), renderer.render(data));
         }
 
-        return new AegisReport(result, plan, textReport, htmlReport, jsonReport, pluginReports);
+        return new AegisReport(result, plan, data, textReport, htmlReport, jsonReport, pluginReports);
     }
 
     /**

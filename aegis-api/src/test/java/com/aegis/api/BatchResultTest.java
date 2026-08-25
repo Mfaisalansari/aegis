@@ -2,6 +2,7 @@ package com.aegis.api;
 
 import com.aegis.core.AegisReport;
 import com.aegis.core.mission.MissionPlan;
+import com.aegis.core.report.MissionReportData;
 import com.aegis.model.context.MissionContext;
 import com.aegis.model.mission.Mission;
 import com.aegis.model.mission.MissionResult;
@@ -57,6 +58,7 @@ class BatchResultTest {
         Mission mission = new Mission(UUID.randomUUID(), "Test", "Test", Map.of());
         MissionResult missionResult = new MissionResult(new MissionContext(mission), MissionStatus.SUCCESS);
 
-        return new AegisReport(missionResult, new MissionPlan(List.of("step")), "text", "html", "json", Map.of());
+        return new AegisReport(missionResult, new MissionPlan(List.of("step")),
+                MissionReportData.from(missionResult.context(), missionResult.status()), "text", "html", "json", Map.of());
     }
 }

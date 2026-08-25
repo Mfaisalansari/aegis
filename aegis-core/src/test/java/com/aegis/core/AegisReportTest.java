@@ -1,6 +1,7 @@
 package com.aegis.core;
 
 import com.aegis.core.mission.MissionPlan;
+import com.aegis.core.report.MissionReportData;
 import com.aegis.model.context.MissionContext;
 import com.aegis.model.mission.Mission;
 import com.aegis.model.mission.MissionResult;
@@ -24,7 +25,8 @@ class AegisReportTest {
         MissionResult missionResult = new MissionResult(new MissionContext(mission), MissionStatus.SUCCESS);
 
         AegisReport report = new AegisReport(
-                missionResult, new MissionPlan(List.of("step")), "text", "html", "json", Map.of());
+                missionResult, new MissionPlan(List.of("step")), MissionReportData.from(missionResult.context(), missionResult.status()),
+                "text", "html", "json", Map.of());
 
         assertEquals(MissionStatus.SUCCESS, report.status());
     }
@@ -38,7 +40,8 @@ class AegisReportTest {
         Map<String, String> callerMap = new HashMap<>(Map.of("markdown", "# Report"));
 
         AegisReport report = new AegisReport(
-                missionResult, new MissionPlan(List.of("step")), "text", "html", "json", callerMap);
+                missionResult, new MissionPlan(List.of("step")), MissionReportData.from(missionResult.context(), missionResult.status()),
+                "text", "html", "json", callerMap);
 
         callerMap.put("markdown", "mutated");
 

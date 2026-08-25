@@ -1236,9 +1236,9 @@ public class RedesignedMissionReportGenerator {
                 .exec-facts div { min-width: 90px; }
                 .exec-facts dt { font-size: 11px; color: var(--muted); margin: 0; }
                 .exec-facts dd { font-family: var(--mono); font-size: 16px; font-weight: 700; margin: 2px 0 0; }
-                .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 1px;
-                    background: var(--line); }
-                .stat { background: var(--surface-raised); padding: 14px 16px; }
+                .stat-grid { display: flex; flex-wrap: wrap; background: var(--surface-raised); }
+                .stat { flex: 1 1 110px; background: var(--surface-raised); padding: 14px 16px;
+                    border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
                 .stat-value { font-family: var(--mono); font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
                 .stat-value.bad { color: var(--bad); }
                 .stat-label { font-size: 11.5px; color: var(--muted); margin-top: 2px; }

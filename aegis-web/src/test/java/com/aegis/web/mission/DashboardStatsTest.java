@@ -2,6 +2,7 @@ package com.aegis.web.mission;
 
 import com.aegis.core.AegisReport;
 import com.aegis.core.mission.MissionPlan;
+import com.aegis.core.report.MissionReportData;
 import com.aegis.model.context.MissionContext;
 import com.aegis.model.mission.Mission;
 import com.aegis.model.mission.MissionResult;
@@ -72,7 +73,8 @@ class DashboardStatsTest {
         MissionJob job = newRunningJob();
 
         MissionResult result = new MissionResult(new MissionContext(testMission()), status);
-        AegisReport report = new AegisReport(result, new MissionPlan(List.of()), "text", "html", "json", Map.of());
+        AegisReport report = new AegisReport(result, new MissionPlan(List.of()),
+                MissionReportData.from(result.context(), result.status()), "text", "html", "json", Map.of());
         job.complete(report);
 
         return job;

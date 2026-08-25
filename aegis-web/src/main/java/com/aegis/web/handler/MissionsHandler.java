@@ -1,7 +1,6 @@
 package com.aegis.web.handler;
 
 import com.aegis.core.AegisReport;
-import com.aegis.core.report.MissionReportData;
 import com.aegis.reporting.RedesignedMissionReportGenerator;
 import com.aegis.web.mission.MissionJob;
 import com.aegis.web.mission.MissionJobStore;
@@ -22,12 +21,10 @@ import java.util.function.Function;
  * from the in-memory {@link AegisReport} — never re-read from disk by a
  * request-supplied path, so there's no path-traversal surface).
  *
- * {@code /missions/{id}/report/redesigned} is the one exception to
- * "straight from the in-memory AegisReport": {@link AegisReport} only
- * ever carries the frozen {@code HtmlExplainabilityReportGenerator}'s
- * HTML (baked in at {@code Aegis.run(...)} time), so the redesigned
- * report is instead built fresh, on request, from the same {@code
- * MissionResult} the job already holds — see {@link #redesignedHtmlReport}.
+ * {@code /missions/{id}/report/redesigned} is rendered on demand rather
+ * than pre-baked like the other formats, but from the exact same {@link
+ * AegisReport#reportData()} the frozen generator itself used — see
+ * {@link #redesignedHtmlReport}.
  */
 public final class MissionsHandler implements HttpHandler {
 
@@ -105,12 +102,13 @@ public final class MissionsHandler implements HttpHandler {
 
     /**
      * Built on demand rather than at mission-run time — {@link AegisReport}
-     * only ever carries the frozen generator's HTML, so there's nothing to
-     * extract here. {@code MissionResult} (context + status) is all {@link
-     * RedesignedMissionReportGenerator} needs, and the job already holds it.
+     * never pre-renders this format. Reuses the exact {@code
+     * MissionReportData} the frozen generator itself was built from
+     * (real screenshots, experiences, and any AI-generated plan/
+     * explanations/recommendations included), so the two reports never
+     * silently diverge.
      */
     private static String redesignedHtmlReport(AegisReport report) {
-        return new RedesignedMissionReportGenerator().generate(
-                MissionReportData.from(report.missionResult().context(), report.missionResult().status()));
+        return new RedesignedMissionReportGenerator().generate(report.reportData());
     }
 }
