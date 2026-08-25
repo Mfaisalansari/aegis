@@ -33,9 +33,25 @@ public class LlmReportSummarizer implements ReportSummarizer {
     private static final Logger log = LoggerFactory.getLogger(LlmReportSummarizer.class);
 
     private final LlmChatClient client;
+    private final String appContext;
 
     public LlmReportSummarizer(LlmChatClient client) {
+        this(client, null);
+    }
+
+    /**
+     * {@code appContext} is the operator-authored Markdown context
+     * document (see {@code MissionBuilder#appContext(String)}), when the
+     * mission that produced this report had one configured — null/blank
+     * when it didn't. This class's only caller, {@code MissionReportData}
+     * (frozen), has no way to pass a new argument through {@link
+     * #summarize}'s existing signature, so this is threaded in at
+     * construction instead; the one call site is {@code Aegis.run(...)},
+     * which already has the {@code Mission} in scope.
+     */
+    public LlmReportSummarizer(LlmChatClient client, String appContext) {
         this.client = client;
+        this.appContext = appContext;
     }
 
     @Override
@@ -110,7 +126,13 @@ public class LlmReportSummarizer implements ReportSummarizer {
         prompt.append("Goal: ").append(missionGoal).append('\n');
         prompt.append("Result: ").append(status).append('\n');
         prompt.append("Coverage: ").append(String.format("%.0f%%", coverage.coveragePercent()))
-                .append(" of interactive elements found were tried\n\n");
+                .append(" of interactive elements found were tried\n");
+
+        if (appContext != null && !appContext.isBlank()) {
+            prompt.append("\nContext about this application:\n").append(appContext).append('\n');
+        }
+
+        prompt.append('\n');
 
         if (bugClusters.isEmpty() && uxFindings.isEmpty() && inspectionFindings.isEmpty()) {
             prompt.append("No findings of any kind this run.\n");

@@ -19,12 +19,12 @@ import com.aegis.model.mission.MissionStatus;
  * — adding a new enum constant without a translation is a compile error
  * here, not a silent gap a reader discovers as a bare enum name.
  */
-final class PlainLanguageGlossary {
+public final class PlainLanguageGlossary {
 
     private PlainLanguageGlossary() {
     }
 
-    static String severityLabel(FindingSeverity severity) {
+    public static String severityLabel(FindingSeverity severity) {
         return switch (severity) {
             case CRITICAL -> "Urgent";
             case HIGH -> "Important";
@@ -34,7 +34,7 @@ final class PlainLanguageGlossary {
     }
 
     /** One clause explaining why this severity level matters — used as a tooltip alongside the badge. */
-    static String severityWhyItMatters(FindingSeverity severity) {
+    public static String severityWhyItMatters(FindingSeverity severity) {
         return switch (severity) {
             case CRITICAL -> "blocks users from completing what they came to do";
             case HIGH -> "significantly hurts the experience";
@@ -43,7 +43,7 @@ final class PlainLanguageGlossary {
         };
     }
 
-    static String categoryLabel(FindingCategory category) {
+    public static String categoryLabel(FindingCategory category) {
         return switch (category) {
             case JAVASCRIPT -> "Technical Errors";
             case NETWORK -> "Loading Problems";
@@ -54,7 +54,7 @@ final class PlainLanguageGlossary {
         };
     }
 
-    static String uxFindingLabel(UxFindingType type) {
+    public static String uxFindingLabel(UxFindingType type) {
         return switch (type) {
             case BACKTRACKING -> "Repeated Back-and-Forth Navigation";
             case JOURNEY_DIVERGENCE -> "Off the Expected Path";
@@ -63,7 +63,7 @@ final class PlainLanguageGlossary {
         };
     }
 
-    static String uxFindingExplanation(UxFindingType type) {
+    public static String uxFindingExplanation(UxFindingType type) {
         return switch (type) {
             case BACKTRACKING -> "A user had to revisit the same screen multiple times to get where they were going.";
             case JOURNEY_DIVERGENCE -> "The path a user actually took didn't match the expected route through the site.";
@@ -73,7 +73,7 @@ final class PlainLanguageGlossary {
         };
     }
 
-    static String inspectionCheckLabel(InspectionCheckType type) {
+    public static String inspectionCheckLabel(InspectionCheckType type) {
         return switch (type) {
             case CONSOLE_ERROR -> "Console Error";
             case UNCAUGHT_EXCEPTION -> "Unhandled Error";
@@ -86,7 +86,7 @@ final class PlainLanguageGlossary {
         };
     }
 
-    static String inspectionCheckExplanation(InspectionCheckType type) {
+    public static String inspectionCheckExplanation(InspectionCheckType type) {
         return switch (type) {
             case CONSOLE_ERROR -> "The browser logged a technical error while the page was running.";
             case UNCAUGHT_EXCEPTION -> "The page's code hit an error it didn't handle — something likely didn't work as intended.";
@@ -101,7 +101,7 @@ final class PlainLanguageGlossary {
     }
 
     /** A past-tense verb phrase for use in "AEGIS ___ X" — e.g. "AEGIS clicked the login button". */
-    static String actionVerb(ActionType type) {
+    public static String actionVerb(ActionType type) {
         return switch (type) {
             case CLICK -> "clicked";
             case DOUBLE_CLICK -> "double-clicked";
@@ -117,7 +117,7 @@ final class PlainLanguageGlossary {
         };
     }
 
-    static String missionStatusLabel(MissionStatus status) {
+    public static String missionStatusLabel(MissionStatus status) {
         return switch (status) {
             case SUCCESS -> "Succeeded";
             case FAILED -> "Failed";
