@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.aegis</groupId>
+        <artifactId>aegis</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>aegis-observation-api</artifactId>
+
+    <properties>
+        <maven.compiler.source>23</maven.compiler.source>
+        <maven.compiler.target>23</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <!--
+         AEGIS 2.0 Phase 1: deliberately depends on aegis-model only, not
+         aegis-core. This module's whole point is to be usable by an
+         adapter (Selenium, Playwright, or otherwise) that never touches
+         AEGIS's own live decision loop (MissionEngine/GoalReasoner/
+         Observer, all in aegis-core) — it only produces a populated
+         MissionContext. Turning that into a real KnowledgeBase/report is
+         the caller's job, via aegis-core's own KnowledgeBaseBuilder/
+         MissionReportData, exactly as AEGIS's own autonomous runs already
+         do — this module never re-implements or wraps that.
+    -->
+    <dependencies>
+        <dependency>
+            <groupId>com.aegis</groupId>
+            <artifactId>aegis-model</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+</project>

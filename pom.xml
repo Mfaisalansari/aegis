@@ -17,6 +17,8 @@
         <module>aegis-cli</module>
         <module>aegis-web</module>
         <module>aegis-launcher</module>
+        <module>aegis-observation-api</module>
+        <module>aegis-reporting</module>
         <module>samples</module>
         <module>examples</module>
     </modules>

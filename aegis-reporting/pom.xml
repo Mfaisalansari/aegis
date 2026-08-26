@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.aegis</groupId>
+        <artifactId>aegis</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>aegis-reporting</artifactId>
+
+    <properties>
+        <maven.compiler.source>23</maven.compiler.source>
+        <maven.compiler.target>23</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <!--
+         AEGIS Platform — Shared Reporting. Turns an ObservationResult
+         (from any Observation Source: aegis-selenium, aegis-playwright,
+         hand-rolled ObservationSession use) into a report, using the
+         exact same frozen aegis-core report generators a live AEGIS
+         mission's own report already goes through. Depends on aegis-core
+         (unlike aegis-observation-api, which deliberately doesn't) —
+         that's the whole point of this module existing separately: it's
+         the opt-in "I want a report" add-on, not a dependency every
+         Observation Source consumer is forced to carry.
+    -->
+    <dependencies>
+        <dependency>
+            <groupId>com.aegis</groupId>
+            <artifactId>aegis-observation-api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.aegis</groupId>
+            <artifactId>aegis-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+</project>
