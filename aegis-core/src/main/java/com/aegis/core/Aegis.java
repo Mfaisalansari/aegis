@@ -16,6 +16,7 @@ import com.aegis.core.mission.MissionPlan;
 import com.aegis.core.mission.MissionPlanner;
 import com.aegis.core.mission.RuleBasedMissionPlanner;
 import com.aegis.core.plugin.ReportRenderer;
+import com.aegis.core.reasoning.experience.ExperienceStore;
 import com.aegis.core.report.ExplainabilityReportGenerator;
 import com.aegis.core.report.HtmlExplainabilityReportGenerator;
 import com.aegis.core.report.JsonReportGenerator;
@@ -33,6 +34,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.ServiceLoader;
+import java.util.Set;
+import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * AEGIS's public entry point: give it a {@link Mission}, get back the
@@ -92,6 +96,23 @@ public final class Aegis {
     public static AegisReport run(
             Mission mission, BrowserConfig browserConfig, KnowledgeConfig knowledgeConfig,
             MissionEventListener eventListener) {
+        return run(mission, browserConfig, knowledgeConfig, eventListener, ExperienceStore.NO_OP);
+    }
+
+    /**
+     * Same as {@link #run(Mission, BrowserConfig, KnowledgeConfig,
+     * MissionEventListener)}, plus an {@link ExperienceStore} — {@link
+     * ExperienceStore#NO_OP} (what the 4-arg overload above passes) means
+     * this run's learning starts from nothing and ends when it does,
+     * exactly as it always has; a real store makes this run benefit from,
+     * and this run's own outcomes contribute to, every other run of the
+     * same mission configuration. The Learning tab reflects that combined
+     * history; the Mission Timeline still shows only what this run itself
+     * did.
+     */
+    public static AegisReport run(
+            Mission mission, BrowserConfig browserConfig, KnowledgeConfig knowledgeConfig,
+            MissionEventListener eventListener, ExperienceStore experienceStore) {
 
         // Generated before execution — a preview of intent, not something
         // the live reasoning pipeline ever reads (see MissionPlan).
@@ -102,11 +123,22 @@ public final class Aegis {
         MissionPlan plan = planner.plan(mission);
 
         EngineFactory.CreatedEngine created =
-                EngineFactory.create(mission, browserConfig, knowledgeConfig.inspection(), eventListener);
+                EngineFactory.create(mission, browserConfig, knowledgeConfig.inspection(), eventListener, experienceStore);
 
         MissionResult result = created.engine().execute(mission);
 
-        List<Experience> experiences = created.experienceRepository().findByMission(mission);
+        // Seeded (prior-run) and genuinely-new experiences share one repository during execute(),
+        // distinguished here by id so the Timeline only ever shows what this run itself did, while
+        // the Learning tab (passed the full merged list further below) can honestly show more.
+        List<Experience> allExperiences = created.experienceRepository().findByMission(mission);
+        Set<UUID> seededIds = created.seededExperiences().stream().map(Experience::id).collect(Collectors.toSet());
+        List<Experience> newExperiencesThisRun = allExperiences.stream()
+                .filter(experience -> !seededIds.contains(experience.id()))
+                .toList();
+
+        experienceStore.recordOutcome(mission, newExperiencesThisRun);
+
+        List<Experience> experiences = newExperiencesThisRun;
         List<ScreenshotSample> screenshots = created.screenshots().get();
         SignalLog signalLog = created.signals().get();
 
@@ -125,9 +157,11 @@ public final class Aegis {
         // Built once and shared by the 3 built-in generators and every
         // discovered ReportRenderer plugin below, instead of each
         // independently rebuilding the same data from raw pieces.
+        // experiences (this run only) feeds the Timeline; allExperiences
+        // (seeded + this run, merged) feeds the Learning tab only.
         MissionReportData data = MissionReportData.from(
                 result.context(), result.status(), bugExplainer, recommender, plan, experiences, screenshots,
-                knowledgeConfig, signalLog, summarizer);
+                knowledgeConfig, signalLog, summarizer, allExperiences);
 
         String textReport = new ExplainabilityReportGenerator().generate(data);
         String htmlReport = new HtmlExplainabilityReportGenerator().generate(data);

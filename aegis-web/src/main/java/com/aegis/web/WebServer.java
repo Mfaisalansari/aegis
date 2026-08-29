@@ -6,6 +6,8 @@ import com.aegis.web.handler.MissionsHandler;
 import com.aegis.web.handler.NaturalLanguageHandler;
 import com.aegis.web.handler.RunHandler;
 import com.aegis.web.handler.RunsHandler;
+import com.aegis.core.reasoning.experience.ExperienceStore;
+import com.aegis.core.reasoning.experience.FileExperienceStore;
 import com.aegis.web.mission.MissionExecutor;
 import com.aegis.web.mission.MissionHistoryStore;
 import com.aegis.web.mission.MissionJobStore;
@@ -31,12 +33,13 @@ public final class WebServer {
     private final HttpServer server;
     private final MissionExecutor missionExecutor;
 
-    public WebServer(int port, int missionConcurrency, String historyDirectory) {
+    public WebServer(int port, int missionConcurrency, String historyDirectory, String experienceDirectory) {
 
         MissionJobStore jobStore = new MissionJobStore();
         MissionHistoryStore historyStore = new MissionHistoryStore(Path.of(historyDirectory));
         historyStore.loadAll().forEach(jobStore::put);
-        this.missionExecutor = new MissionExecutor(missionConcurrency, historyStore);
+        ExperienceStore experienceStore = new FileExperienceStore(Path.of(experienceDirectory));
+        this.missionExecutor = new MissionExecutor(missionConcurrency, historyStore, experienceStore);
 
         try {
             this.server = HttpServer.create(new InetSocketAddress(port), 0);

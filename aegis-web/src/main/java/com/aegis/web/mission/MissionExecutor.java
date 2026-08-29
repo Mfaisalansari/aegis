@@ -5,6 +5,7 @@ import com.aegis.core.Aegis;
 import com.aegis.core.AegisReport;
 import com.aegis.core.browser.BrowserConfig;
 import com.aegis.core.knowledge.KnowledgeConfig;
+import com.aegis.core.reasoning.experience.ExperienceStore;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -24,16 +25,18 @@ public final class MissionExecutor {
 
     private final ExecutorService executor;
     private final MissionHistoryStore historyStore;
+    private final ExperienceStore experienceStore;
 
-    public MissionExecutor(int concurrency, MissionHistoryStore historyStore) {
+    public MissionExecutor(int concurrency, MissionHistoryStore historyStore, ExperienceStore experienceStore) {
         this.executor = Executors.newFixedThreadPool(Math.max(1, concurrency));
         this.historyStore = historyStore;
+        this.experienceStore = experienceStore;
     }
 
     public void submit(MissionJob job, BrowserConfig browserConfig, KnowledgeConfig knowledgeConfig, String reportsDirectory) {
         executor.execute(() -> {
             try {
-                AegisReport report = Aegis.run(job.mission(), browserConfig, knowledgeConfig, job);
+                AegisReport report = Aegis.run(job.mission(), browserConfig, knowledgeConfig, job, experienceStore);
                 ReportWriter.writeAll(report, reportsDirectory);
                 job.complete(report);
                 historyStore.save(job);
@@ -50,7 +53,7 @@ public final class MissionExecutor {
     }
 
     /**
-     * The real configured pool size (see {@link #MissionExecutor(int)}) —
+     * The real configured pool size (see {@link #MissionExecutor(int, MissionHistoryStore, ExperienceStore)}) —
      * {@code getMaximumPoolSize()}, not {@code getPoolSize()}: a fixed
      * thread pool only spins threads up as tasks arrive, so the latter
      * would under-report "4" as "0" or "1" on an idle server instead of

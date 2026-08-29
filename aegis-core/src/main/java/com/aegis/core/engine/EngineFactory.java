@@ -52,6 +52,7 @@ import com.aegis.core.reasoning.confidence.HeuristicCandidateConfidenceEstimator
 import com.aegis.core.reasoning.experience.DefaultExperienceRecorder;
 import com.aegis.core.reasoning.experience.ExperienceRecorder;
 import com.aegis.core.reasoning.experience.ExperienceRepository;
+import com.aegis.core.reasoning.experience.ExperienceStore;
 import com.aegis.core.reasoning.experience.InMemoryExperienceRepository;
 import com.aegis.core.reasoning.factory.ActionFactory;
 import com.aegis.core.reasoning.factory.DefaultActionFactory;
@@ -91,6 +92,7 @@ import com.aegis.core.reasoning.value.EdgeCaseInputValueResolver;
 import com.aegis.core.reasoning.value.InputValueResolver;
 import com.aegis.core.reasoning.value.InputValueResolverRegistry;
 import com.aegis.core.world.WorldModel;
+import com.aegis.model.experience.Experience;
 import com.aegis.model.mission.Mission;
 
 import java.util.ArrayList;
@@ -112,19 +114,25 @@ public final class EngineFactory {
      * during the run (needed by Reporting v2's Mission Timeline and
      * Learning summary), a way to read back every screenshot
      * SelfHealingBrowser captured during the run (needed by the Mission
-     * Timeline's screenshot hooks), and a way to read back everything the
+     * Timeline's screenshot hooks), a way to read back everything the
      * Page Inspection Layer's SignalRecorder captured live (console/
-     * network signals, DOM snapshots). All four are read *after* the
-     * mission finishes — create() itself runs before execute() is even
-     * called, so at this point the repository is still empty and nothing
-     * has been captured yet. Nothing about how the engine itself behaves
-     * changes; reporting only reads what already happened.
+     * network signals, DOM snapshots), and exactly which experiences (if
+     * any) were seeded into experienceRepository from a prior run's
+     * history before execute() started (see the ExperienceStore param
+     * below) — needed by Aegis.run to tell those apart from what this run
+     * genuinely records, since both end up in the same repository. All
+     * five are read *after* the mission finishes — create() itself runs
+     * before execute() is even called, so at this point the repository
+     * has only whatever was seeded and nothing this run has recorded yet.
+     * Nothing about how the engine itself behaves changes; reporting only
+     * reads what already happened.
      */
     public record CreatedEngine(
             MissionEngine engine,
             ExperienceRepository experienceRepository,
             Supplier<List<ScreenshotSample>> screenshots,
-            Supplier<SignalLog> signals) {
+            Supplier<SignalLog> signals,
+            List<Experience> seededExperiences) {
     }
 
     public static CreatedEngine create() {
@@ -171,6 +179,22 @@ public final class EngineFactory {
     public static CreatedEngine create(
             Mission mission, BrowserConfig browserConfig, InspectionConfig inspectionConfig,
             MissionEventListener eventListener) {
+        return create(mission, browserConfig, inspectionConfig, eventListener, ExperienceStore.NO_OP);
+    }
+
+    /**
+     * Same as the 4-arg overload, plus an {@link ExperienceStore} — {@link
+     * ExperienceStore#NO_OP} (what the 4-arg overload above passes) means
+     * {@code experienceRepository} starts genuinely empty, exactly as it
+     * always has; a real store seeds it with every prior run's outcomes
+     * for this mission's configuration before execute() starts, so {@code
+     * HeuristicCandidateConfidenceEstimator}'s scoring adjustments reflect
+     * real cross-run history from the very first candidate, not just what
+     * happens to repeat within this one run.
+     */
+    public static CreatedEngine create(
+            Mission mission, BrowserConfig browserConfig, InspectionConfig inspectionConfig,
+            MissionEventListener eventListener, ExperienceStore experienceStore) {
 
         /*
          * Browser
@@ -319,6 +343,17 @@ public final class EngineFactory {
          */
         ExperienceRepository experienceRepository =
                 new InMemoryExperienceRepository();
+
+        /*
+         * Cross-mission history (see ExperienceStore) — seeded in before
+         * execute() ever runs, so it's indistinguishable from this run's
+         * own earlier iterations as far as the estimator/analyzer are
+         * concerned. mission == null for the null-mission overloads above;
+         * there's no configuration to look up history for in that case.
+         */
+        List<Experience> seededExperiences =
+                mission != null ? experienceStore.loadPriorExperiences(mission) : List.of();
+        seededExperiences.forEach(experienceRepository::save);
 
         PatternAnalyzer patternAnalyzer =
                 new DefaultPatternAnalyzer();
@@ -525,7 +560,9 @@ public final class EngineFactory {
                 experienceRecorder
         );
 
-        return new CreatedEngine(engine, experienceRepository, selfHealingBrowser::capturedScreenshots, signalRecorder::toSignalLog);
+        return new CreatedEngine(
+                engine, experienceRepository, selfHealingBrowser::capturedScreenshots,
+                signalRecorder::toSignalLog, seededExperiences);
     }
 
     /**

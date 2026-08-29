@@ -212,12 +212,42 @@ public record MissionReportData(
      * for a real paragraph with zero model dependency). This is the
      * "what happened, in plain English" a non-technical reader wants
      * before any of the technical detail below it in the HTML report.
+     *
+     * Delegates to the 11-arg overload below, passing {@code experiences}
+     * for both the timeline and the Learning summary — identical to this
+     * method's own behavior before that overload existed.
      */
     public static MissionReportData from(
             MissionContext context, MissionStatus status, BugExplainer explainer,
             RecommendationEngine recommender, MissionPlan plan, List<Experience> experiences,
             List<ScreenshotSample> screenshots, KnowledgeConfig knowledgeConfig, SignalLog signalLog,
             ReportSummarizer summarizer) {
+
+        return from(context, status, explainer, recommender, plan, experiences, screenshots,
+                knowledgeConfig, signalLog, summarizer, experiences);
+    }
+
+    /**
+     * Same as the 10-arg overload, plus a separate {@code
+     * experiencesForLearning} list specifically for the Learning summary
+     * — distinct from {@code experiences}, which stays the sole source for
+     * the Mission Timeline. {@code Aegis.run}'s cross-mission-history
+     * overload is the one real caller that ever passes something wider
+     * here: {@code experiences} stays exactly what this run itself
+     * recorded (so the Timeline never shows an action that didn't
+     * genuinely happen this run), while {@code experiencesForLearning}
+     * additionally includes prior runs' outcomes for this same mission
+     * configuration (see {@code ExperienceStore}), so the Learning tab can
+     * honestly reflect real cross-run reliability instead of always
+     * starting from zero. Every other caller passes the same list for
+     * both parameters (see the 10-arg overload above), so this is fully
+     * backward compatible.
+     */
+    public static MissionReportData from(
+            MissionContext context, MissionStatus status, BugExplainer explainer,
+            RecommendationEngine recommender, MissionPlan plan, List<Experience> experiences,
+            List<ScreenshotSample> screenshots, KnowledgeConfig knowledgeConfig, SignalLog signalLog,
+            ReportSummarizer summarizer, List<Experience> experiencesForLearning) {
 
         List<Observation> observations = context.getExecutionState().getObservations();
         List<Action> actions = context.getExecutionState().getActions();
@@ -285,7 +315,7 @@ public record MissionReportData(
                 recommendation,
                 plan,
                 timeline,
-                computeLearningSummary(experiences),
+                computeLearningSummary(experiencesForLearning),
                 Duration.between(context.getExecutionState().getStartedAt(), endTime),
                 actions.size(),
                 averageConfidence,
