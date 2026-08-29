@@ -8,6 +8,7 @@ import com.aegis.core.knowledge.KnowledgeConfig;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
 
 /**
  * Runs missions on a dedicated background thread pool, deliberately
@@ -22,21 +23,41 @@ import java.util.concurrent.Executors;
 public final class MissionExecutor {
 
     private final ExecutorService executor;
+    private final MissionHistoryStore historyStore;
 
-    public MissionExecutor(int concurrency) {
+    public MissionExecutor(int concurrency, MissionHistoryStore historyStore) {
         this.executor = Executors.newFixedThreadPool(Math.max(1, concurrency));
+        this.historyStore = historyStore;
     }
 
     public void submit(MissionJob job, BrowserConfig browserConfig, KnowledgeConfig knowledgeConfig, String reportsDirectory) {
         executor.execute(() -> {
             try {
-                AegisReport report = Aegis.run(job.mission(), browserConfig, knowledgeConfig);
+                AegisReport report = Aegis.run(job.mission(), browserConfig, knowledgeConfig, job);
                 ReportWriter.writeAll(report, reportsDirectory);
                 job.complete(report);
+                historyStore.save(job);
             } catch (Exception e) {
                 job.fail(e.toString());
+                historyStore.save(job);
             }
         });
+    }
+
+    /** Real, currently-executing mission count — backs the dashboard's "worker pool" widget. */
+    public int activeCount() {
+        return ((ThreadPoolExecutor) executor).getActiveCount();
+    }
+
+    /**
+     * The real configured pool size (see {@link #MissionExecutor(int)}) —
+     * {@code getMaximumPoolSize()}, not {@code getPoolSize()}: a fixed
+     * thread pool only spins threads up as tasks arrive, so the latter
+     * would under-report "4" as "0" or "1" on an idle server instead of
+     * the actual configured capacity.
+     */
+    public int poolSize() {
+        return ((ThreadPoolExecutor) executor).getMaximumPoolSize();
     }
 
     public void shutdown() {

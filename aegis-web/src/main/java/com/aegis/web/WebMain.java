@@ -10,12 +10,14 @@ public final class WebMain {
 
         int port = resolvePort(args);
         int concurrency = resolveConcurrency();
+        String historyDirectory = resolveHistoryDirectory();
 
-        WebServer server = new WebServer(port, concurrency);
+        WebServer server = new WebServer(port, concurrency, historyDirectory);
         server.start();
 
         System.out.println("AEGIS Web UI running at http://localhost:" + server.port());
         System.out.println("Mission concurrency: " + concurrency);
+        System.out.println("Mission history directory: " + historyDirectory);
     }
 
     private static int resolvePort(String[] args) {
@@ -33,5 +35,10 @@ public final class WebMain {
     private static int resolveConcurrency() {
         String env = System.getenv("AEGIS_WEB_CONCURRENCY");
         return env != null ? Integer.parseInt(env) : 2;
+    }
+
+    private static String resolveHistoryDirectory() {
+        String env = System.getenv("AEGIS_WEB_HISTORY_DIR");
+        return env != null ? env : "mission-history";
     }
 }

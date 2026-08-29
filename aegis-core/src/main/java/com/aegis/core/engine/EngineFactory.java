@@ -30,6 +30,10 @@ import com.aegis.core.plugin.NamedInputValueResolver;
 import com.aegis.core.plugin.SessionProvider;
 import com.aegis.core.resilience.ScreenshotSample;
 import com.aegis.core.resilience.SelfHealingBrowser;
+import com.aegis.core.stream.MissionEventListener;
+import com.aegis.core.stream.StreamingExecutor;
+import com.aegis.core.stream.StreamingObserver;
+import com.aegis.core.stream.StreamingPlanner;
 import com.aegis.core.controller.DefaultMissionController;
 import com.aegis.core.decision.DecisionEngine;
 import com.aegis.core.decision.RuleBasedDecisionEngine;
@@ -151,6 +155,22 @@ public final class EngineFactory {
      * per-state cost this layer adds — is skipped entirely.
      */
     public static CreatedEngine create(Mission mission, BrowserConfig browserConfig, InspectionConfig inspectionConfig) {
+        return create(mission, browserConfig, inspectionConfig, MissionEventListener.NO_OP);
+    }
+
+    /**
+     * Same as the 3-arg overload, plus a live {@link MissionEventListener}
+     * — {@link MissionEventListener#NO_OP} (what the 3-arg overload above
+     * passes) means {@code observer}/{@code planner}/{@code executor} run
+     * completely unwrapped, unchanged from before this listener existed; a
+     * real listener wraps each in its {@code Streaming*} decorator so it
+     * also emits a {@link com.aegis.core.stream.MissionStreamEvent} per
+     * real observation/decision/execution, without either the frozen
+     * interfaces or their real implementations changing at all.
+     */
+    public static CreatedEngine create(
+            Mission mission, BrowserConfig browserConfig, InspectionConfig inspectionConfig,
+            MissionEventListener eventListener) {
 
         /*
          * Browser
@@ -247,6 +267,10 @@ public final class EngineFactory {
 
         if (inspectionConfig.captureDom()) {
             observer = new SignalCapturingObserver(observer, browser, signalRecorder);
+        }
+
+        if (eventListener != MissionEventListener.NO_OP) {
+            observer = new StreamingObserver(observer, eventListener);
         }
 
         /*
@@ -434,6 +458,10 @@ public final class EngineFactory {
                         decisionEngine
                 );
 
+        if (eventListener != MissionEventListener.NO_OP) {
+            planner = new StreamingPlanner(planner, eventListener);
+        }
+
         /*
          * Action Handlers
          */
@@ -455,6 +483,10 @@ public final class EngineFactory {
          */
         Executor executor =
                 new ActionExecutor(handlers);
+
+        if (eventListener != MissionEventListener.NO_OP) {
+            executor = new StreamingExecutor(executor, eventListener);
+        }
 
         /*
          * Goal Evaluator

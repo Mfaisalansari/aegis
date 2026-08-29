@@ -24,6 +24,7 @@ import com.aegis.core.report.MissionReportData;
 import com.aegis.core.report.ReportSummarizer;
 import com.aegis.core.report.RuleBasedReportSummarizer;
 import com.aegis.core.resilience.ScreenshotSample;
+import com.aegis.core.stream.MissionEventListener;
 import com.aegis.model.experience.Experience;
 import com.aegis.model.mission.Mission;
 import com.aegis.model.mission.MissionResult;
@@ -74,6 +75,23 @@ public final class Aegis {
      * capture disabled.
      */
     public static AegisReport run(Mission mission, BrowserConfig browserConfig, KnowledgeConfig knowledgeConfig) {
+        return run(mission, browserConfig, knowledgeConfig, MissionEventListener.NO_OP);
+    }
+
+    /**
+     * Same as {@link #run(Mission, BrowserConfig, KnowledgeConfig)}, plus a
+     * live {@link MissionEventListener} — {@link MissionEventListener#NO_OP}
+     * (what the 3-arg overload above passes) means the mission runs exactly
+     * as it always has; a real listener gets a {@link
+     * com.aegis.core.stream.MissionStreamEvent} for every real observation/
+     * decision/execution as the mission runs, not just the finished {@link
+     * AegisReport} at the end. See {@link EngineFactory#create(Mission,
+     * BrowserConfig, com.aegis.core.knowledge.InspectionConfig,
+     * MissionEventListener)}.
+     */
+    public static AegisReport run(
+            Mission mission, BrowserConfig browserConfig, KnowledgeConfig knowledgeConfig,
+            MissionEventListener eventListener) {
 
         // Generated before execution — a preview of intent, not something
         // the live reasoning pipeline ever reads (see MissionPlan).
@@ -83,7 +101,8 @@ public final class Aegis {
 
         MissionPlan plan = planner.plan(mission);
 
-        EngineFactory.CreatedEngine created = EngineFactory.create(mission, browserConfig, knowledgeConfig.inspection());
+        EngineFactory.CreatedEngine created =
+                EngineFactory.create(mission, browserConfig, knowledgeConfig.inspection(), eventListener);
 
         MissionResult result = created.engine().execute(mission);
 

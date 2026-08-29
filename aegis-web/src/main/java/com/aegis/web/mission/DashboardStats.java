@@ -26,7 +26,7 @@ public record DashboardStats(int total, String passRateLabel, long avgDurationSe
                 case DONE -> {
                     finished++;
                     totalDurationSeconds += Duration.between(job.submittedAt(), job.finishedAt()).toSeconds();
-                    if (job.report().status() == MissionStatus.SUCCESS) {
+                    if (job.summary().status() == MissionStatus.SUCCESS) {
                         succeeded++;
                     }
                 }

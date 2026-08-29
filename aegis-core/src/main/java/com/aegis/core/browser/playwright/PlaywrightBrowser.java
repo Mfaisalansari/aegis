@@ -690,8 +690,8 @@ public class PlaywrightBrowser implements Browser {
      * Elements found in the main frame produce exactly the locators this
      * class always produced; elements found inside an actual {@code
      * <iframe>} get a {@code frame:N>} prefix via {@link
-     * #buildBestLocator(int, String, String, String, int)} so {@link
-     * #resolveLocator} can find them again later.
+     * #buildBestLocator(int, String, Locator, String, String, int)} so
+     * {@link #resolveLocator} can find them again later.
      */
     @Override
     public List<ElementInfo> getButtons() {
@@ -712,7 +712,7 @@ public class PlaywrightBrowser implements Browser {
                 String text = safe(button.textContent()).trim();
                 String type = normalizeButtonType(button.getAttribute("type"));
 
-                String bestLocator = buildBestLocator(frameIndex, "button", id, name, i);
+                String bestLocator = buildBestLocator(frameIndex, "button", button, id, name, i);
 
                 buttons.add(new ElementInfo(
                         "button",
@@ -749,7 +749,7 @@ public class PlaywrightBrowser implements Browser {
                 String name = safe(input.getAttribute("name"));
                 String type = normalizeInputType(input.getAttribute("type"));
 
-                String bestLocator = buildBestLocator(frameIndex, "input", id, name, i);
+                String bestLocator = buildBestLocator(frameIndex, "input", input, id, name, i);
 
                 inputs.add(new ElementInfo(
                         "input",
@@ -786,7 +786,7 @@ public class PlaywrightBrowser implements Browser {
                 String name = safe(link.getAttribute("name"));
                 String text = safe(link.textContent()).trim();
 
-                String bestLocator = buildBestLocator(frameIndex, "a", id, name, i);
+                String bestLocator = buildBestLocator(frameIndex, "a", link, id, name, i);
 
                 links.add(new ElementInfo(
                         "a",
@@ -822,7 +822,7 @@ public class PlaywrightBrowser implements Browser {
                 String id = safe(select.getAttribute("id"));
                 String name = safe(select.getAttribute("name"));
 
-                String bestLocator = buildBestLocator(frameIndex, "select", id, name, i);
+                String bestLocator = buildBestLocator(frameIndex, "select", select, id, name, i);
 
                 selects.add(new ElementInfo(
                         "select",
@@ -872,56 +872,71 @@ public class PlaywrightBrowser implements Browser {
     }
 
     /**
-     * Returns a locator guaranteed to match exactly this one element.
+     * Returns a locator guaranteed to match exactly this one element, tried
+     * in order of preference: {@code id}, {@code name}, {@code data-testid},
+     * {@code aria-label}, {@code placeholder}, then finally a purely
+     * positional {@code :nth-match} fallback. The first four are real DOM
+     * attributes AEGIS reads directly off the element; {@code data-testid}
+     * and {@code aria-label} in particular are often more stable across
+     * deploys than an id a framework regenerates, and reaching for them
+     * before falling back to position means fewer elements ever need the
+     * weakest, purely-positional shape at all.
      *
-     * Neither id nor name can be trusted to be unique without checking:
-     * malformed HTML can duplicate ids, and name collisions are a
-     * standard pattern (e.g. ASP.NET MVC pairs a checkbox with a hidden
-     * input of the same name so unchecked boxes still submit "false").
-     * Both were observed on real sites during testing, so this verifies
-     * against the live page rather than assuming either is safe.
+     * None of the four can be trusted to be unique without checking: even
+     * id and name have known real-world collision patterns (malformed HTML
+     * duplicating an id; ASP.NET MVC pairing a checkbox with a hidden input
+     * of the same name so unchecked boxes still submit "false"), so this
+     * verifies against the live page rather than assuming any of them is
+     * safe — same reasoning now applied uniformly to all four instead of
+     * just the original two.
      *
-     * id/name are embedded as quoted attribute values ([id='...']), not
-     * bare CSS identifiers (#...): real ids can contain characters that
-     * are syntactically invalid after a bare '#' — e.g. saucedemo.com uses
-     * ids like "add-to-cart-test.allthethings()-t-shirt-(red)", where the
-     * unescaped '.' and '(' broke every observation on that page. Inside a
-     * quoted attribute value only the quote character and backslash need
-     * escaping, so this handles those cases without needing full
-     * CSS-identifier escaping.
+     * Every value is embedded as a quoted attribute value ([attr='...']),
+     * not a bare CSS identifier (#...): real ids can contain characters
+     * that are syntactically invalid after a bare '#' — e.g. saucedemo.com
+     * uses ids like "add-to-cart-test.allthethings()-t-shirt-(red)", where
+     * the unescaped '.' and '(' broke every observation on that page.
+     * Inside a quoted attribute value only the quote character and
+     * backslash need escaping, so this handles those cases without needing
+     * full CSS-identifier escaping.
      *
      * The final fallback, :nth-match, is a Playwright CSS extension that
      * indexes globally across the whole page — unlike native
      * :nth-of-type, which is per-parent and previously caused a
      * strict-mode crash on a page with 61 links spread across many
      * different parent containers.
+     *
+     * {@code frameIndex} is the same index {@code page.frames()} uses (0 =
+     * main frame). The uniqueness probe ({@link #matchesExactlyOne}) must
+     * run against that same frame's own document — an attribute value
+     * unique within an iframe's document could coincidentally collide with
+     * one elsewhere on the page, and vice versa, since each frame is a
+     * genuinely separate document. The returned locator only gets the
+     * {@code frame:N>} prefix when {@code frameIndex != 0}, so every
+     * main-frame locator stays byte-for-byte identical to what this method
+     * always produced.
      */
-    /**
-     * Frame-aware overload: {@code frameIndex} is the same index {@code
-     * page.frames()} uses (0 = main frame). The uniqueness probe ({@link
-     * #matchesExactlyOne}) must run against that same frame's own document
-     * — an id unique within an iframe's document could coincidentally
-     * collide with one elsewhere on the page, and vice versa, since each
-     * frame is a genuinely separate document. The returned locator only
-     * gets the {@code frame:N>} prefix when {@code frameIndex != 0}, so
-     * every main-frame locator stays byte-for-byte identical to what this
-     * method always produced.
-     */
-    private String buildBestLocator(int frameIndex, String tag, String id, String name, int index) {
+    private String buildBestLocator(int frameIndex, String tag, Locator element, String id, String name, int index) {
 
         String prefix = frameIndex == 0 ? "" : "frame:" + frameIndex + ">";
 
-        if (!id.isBlank()) {
-            String idLocator = "[id='" + escapeAttributeValue(id) + "']";
-            if (matchesExactlyOne(frameIndex, idLocator)) {
-                return prefix + idLocator;
-            }
-        }
+        String[][] attributeCandidates = {
+                {"id", id},
+                {"name", name},
+                {"data-testid", safe(element.getAttribute("data-testid"))},
+                {"aria-label", safe(element.getAttribute("aria-label"))},
+                {"placeholder", safe(element.getAttribute("placeholder"))},
+        };
 
-        if (!name.isBlank()) {
-            String nameLocator = "[name='" + escapeAttributeValue(name) + "']";
-            if (matchesExactlyOne(frameIndex, nameLocator)) {
-                return prefix + nameLocator;
+        for (String[] candidate : attributeCandidates) {
+
+            String value = candidate[1];
+            if (value.isBlank()) {
+                continue;
+            }
+
+            String attributeLocator = "[" + candidate[0] + "='" + escapeAttributeValue(value) + "']";
+            if (matchesExactlyOne(frameIndex, attributeLocator)) {
+                return prefix + attributeLocator;
             }
         }
 

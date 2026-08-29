@@ -30,6 +30,12 @@
             <version>${project.version}</version>
         </dependency>
 
+        <!-- Already transitive via aegis-api -> aegis-core; declared directly here too since MissionHistoryStore uses its API. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>

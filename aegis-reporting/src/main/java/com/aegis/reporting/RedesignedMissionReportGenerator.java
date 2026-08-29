@@ -20,6 +20,8 @@ import com.aegis.core.knowledge.UxFindingCatalog;
 import com.aegis.core.reasoning.learning.PatternStatistics;
 import com.aegis.core.report.ExplorationCoverage;
 import com.aegis.core.report.FindingCategory;
+import com.aegis.core.report.LearningAdjustmentGlossary;
+import com.aegis.core.report.LearningHonestyGlossary;
 import com.aegis.core.report.LearningSummary;
 import com.aegis.core.report.MissionReportData;
 import com.aegis.core.report.PageCoverage;
@@ -194,8 +196,7 @@ public class RedesignedMissionReportGenerator {
             return "no experience recorded this mission";
         }
 
-        return summary.newExperiences() + " new, " + summary.updatedActions() + " updated — "
-                + summary.confidenceIncreased() + " improved, " + summary.confidenceReduced() + " declined";
+        return LearningHonestyGlossary.honestLearningLine(summary);
     }
 
     private String formatDuration(Duration duration) {
@@ -238,7 +239,7 @@ public class RedesignedMissionReportGenerator {
                     .append("<div class=\"tl-headline\">").append(escape(event.headline())).append("</div>");
 
             if (event.detail() != null && !event.detail().isBlank()) {
-                section.append("<div class=\"tl-detail\">").append(escape(event.detail())).append("</div>");
+                section.append("<div class=\"tl-detail\">").append(escape(LearningAdjustmentGlossary.honestReasoning(event.detail()))).append("</div>");
             }
 
             if (event.screenshotDataUri() != null && !event.screenshotDataUri().isBlank()) {
@@ -938,30 +939,42 @@ public class RedesignedMissionReportGenerator {
 
         StringBuilder section = new StringBuilder("<section id=\"learning\"><h2 class=\"section-title\">Learning</h2>");
 
+        long confirmedReliable = LearningHonestyGlossary.confirmedReliableCount(summary.actionPerformance());
+        long confirmedUnreliable = LearningHonestyGlossary.confirmedUnreliableCount(summary.actionPerformance());
+
         section.append("<div class=\"panel\"><div class=\"stat-grid\">")
                 .append(tile("New Things Learned", String.valueOf(summary.newExperiences()), false))
-                .append(tile("Adjusted Based on Results", String.valueOf(summary.updatedActions()), false))
-                .append(tile("Got More Reliable", String.valueOf(summary.confidenceIncreased()), false))
-                .append(tile("Got Less Reliable", String.valueOf(summary.confidenceReduced()), summary.confidenceReduced() > 0))
-                .append("</div></div>");
+                .append(tile("Tried More Than Once", String.valueOf(summary.updatedActions()), false))
+                .append(tile("Confirmed Reliable", String.valueOf(confirmedReliable), false))
+                .append(tile("Confirmed Unreliable", String.valueOf(confirmedUnreliable), confirmedUnreliable > 0))
+                .append("</div>");
+
+        if (summary.updatedActions() == 0 && !summary.actionPerformance().isEmpty()) {
+            section.append("<p class=\"help\" style=\"padding:0 22px 18px\">Every action this run was a first attempt "
+                    + "&mdash; nothing was repeated enough yet to say what's actually more or less reliable.</p>");
+        }
+
+        section.append("</div>");
 
         if (summary.actionPerformance().isEmpty()) {
             section.append("<p class=\"empty\">No experience recorded this mission.</p></section>");
             return section.toString();
         }
 
-        List<PatternStatistics> best = summary.actionPerformance()
-                .subList(0, Math.min(3, summary.actionPerformance().size()));
+        section.append("<p class=\"caption\">").append(escape(LearningHonestyGlossary.honestLearningLine(summary))).append("</p>");
 
-        List<PatternStatistics> worstFirst = summary.actionPerformance().reversed();
-        List<PatternStatistics> worst = worstFirst.subList(0, Math.min(3, worstFirst.size()));
+        List<PatternStatistics> actionPerformance = summary.actionPerformance();
+        String table = "<div class=\"panel\">" + performanceTable(actionPerformance) + "</div>";
 
-        section.append("<p class=\"caption\">").append(escape(learningLine(summary))).append("</p>");
-        section.append("<details class=\"tech-expander\"><summary>Show the technical breakdown, action by action</summary>");
-        section.append("<div class=\"performance-columns\">");
-        section.append("<div><h3 class=\"sub\">Best Performing Actions</h3>").append(performanceTable(best)).append("</div>");
-        section.append("<div><h3 class=\"sub\">Worst Performing Actions</h3>").append(performanceTable(worst)).append("</div>");
-        section.append("</div></details></section>");
+        if (actionPerformance.size() > 15) {
+            section.append("<details open class=\"tech-expander\"><summary>")
+                    .append(actionPerformance.size()).append(" actions tracked this run</summary>")
+                    .append(table).append("</details>");
+        } else {
+            section.append(table);
+        }
+
+        section.append("</section>");
 
         return section.toString();
     }
@@ -969,7 +982,7 @@ public class RedesignedMissionReportGenerator {
     private String performanceTable(List<PatternStatistics> stats) {
 
         StringBuilder table = new StringBuilder(
-                "<table><thead><tr><th>Action</th><th>Success Rate</th><th>Runs</th></tr></thead><tbody>");
+                "<table><thead><tr><th>Action</th><th>Success Rate</th><th>Runs</th><th>Status</th></tr></thead><tbody>");
 
         for (PatternStatistics stat : stats) {
 
@@ -978,7 +991,9 @@ public class RedesignedMissionReportGenerator {
                     .append((int) (stat.successRate() * 100)).append("%\"></div></div> ")
                     .append(String.format("%.0f%%", stat.successRate() * 100)).append("</td>")
                     .append("<td>").append(stat.successfulExecutions()).append("/").append(stat.totalExecutions())
-                    .append("</td></tr>");
+                    .append("</td>")
+                    .append("<td>").append(escape(LearningHonestyGlossary.statusLabel(stat))).append("</td>")
+                    .append("</tr>");
         }
 
         table.append("</tbody></table>");
@@ -1105,7 +1120,7 @@ public class RedesignedMissionReportGenerator {
                     : String.format("+%.2f over %d alternative%s", margin, step.candidates().size() - 1,
                             step.candidates().size() - 1 == 1 ? "" : "s");
 
-            boolean stepWasLearned = selected.reasoning().contains("learning-adjusted");
+            boolean stepWasLearned = LearningAdjustmentGlossary.isGenuineLearnedAdjustment(selected.reasoning());
             String selectedValue = selected.action().value();
 
             section.append("<details class=\"tech-expander step-detail\">")
@@ -1126,7 +1141,7 @@ public class RedesignedMissionReportGenerator {
             for (CandidateAction candidate : step.candidates()) {
 
                 boolean isSelected = candidate.action().id().equals(selected.action().id());
-                boolean candidateWasLearned = candidate.reasoning().contains("learning-adjusted");
+                boolean candidateWasLearned = LearningAdjustmentGlossary.isGenuineLearnedAdjustment(candidate.reasoning());
                 String candidateValue = candidate.action().value();
 
                 section.append("<tr class=\"").append(isSelected ? "selected" : "").append("\">")
@@ -1138,7 +1153,7 @@ public class RedesignedMissionReportGenerator {
                         .append(String.format("%.0f%%", candidate.confidence() * 100)).append("</td>")
                         .append("<td>").append(candidateWasLearned ? "<span class=\"learned-badge\">learned</span>" : "")
                         .append(isSelected ? " <span class=\"winner-badge\">winner</span>" : "").append("</td>")
-                        .append("<td>").append(escape(candidate.reasoning())).append("</td>")
+                        .append("<td>").append(escape(LearningAdjustmentGlossary.honestReasoning(candidate.reasoning()))).append("</td>")
                         .append("</tr>");
             }
 

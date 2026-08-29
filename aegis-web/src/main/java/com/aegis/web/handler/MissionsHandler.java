@@ -1,7 +1,6 @@
 package com.aegis.web.handler;
 
-import com.aegis.core.AegisReport;
-import com.aegis.reporting.RedesignedMissionReportGenerator;
+import com.aegis.core.stream.MissionStreamEvent;
 import com.aegis.web.mission.MissionJob;
 import com.aegis.web.mission.MissionJobStore;
 import com.aegis.web.view.MissionStatusView;
@@ -9,6 +8,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Optional;
 import java.util.function.Function;
 
@@ -17,14 +17,12 @@ import java.util.function.Function;
  * exact/prefix routing, no path-pattern matching, so this one handler
  * does its own manual suffix dispatch: {@code /missions/{id}} (status
  * page), {@code /missions/{id}/status} (JSON), and
- * {@code /missions/{id}/report[.json|.txt]} (view/download, straight
- * from the in-memory {@link AegisReport} — never re-read from disk by a
- * request-supplied path, so there's no path-traversal surface).
+ * {@code /missions/{id}/report[.json|.txt]} (view/download).
  *
- * {@code /missions/{id}/report/redesigned} is rendered on demand rather
- * than pre-baked like the other formats, but from the exact same {@link
- * AegisReport#reportData()} the frozen generator itself used — see
- * {@link #redesignedHtmlReport}.
+ * Report bytes come from {@link MissionJob}'s own accessors, which serve
+ * the live in-memory report when this session ran the mission, or the
+ * frozen strings loaded from {@code MissionHistoryStore} when it was
+ * reloaded after a restart — this handler doesn't need to know which.
  */
 public final class MissionsHandler implements HttpHandler {
 
@@ -68,18 +66,49 @@ public final class MissionsHandler implements HttpHandler {
         switch (suffix) {
             case "" -> HandlerSupport.sendHtml(exchange, 200, MissionStatusView.render(job));
             case "status" -> handleStatusJson(exchange, job);
-            case "report" -> handleReport(exchange, job, "text/html; charset=utf-8", AegisReport::htmlReport, "html", download);
-            case "report.json" -> handleReport(exchange, job, "application/json; charset=utf-8", AegisReport::jsonReport, "json", download);
-            case "report.txt" -> handleReport(exchange, job, "text/plain; charset=utf-8", AegisReport::textReport, "txt", download);
-            case "report/redesigned" -> handleReport(exchange, job, "text/html; charset=utf-8", MissionsHandler::redesignedHtmlReport, "html", download);
+            case "report" -> handleReport(exchange, job, "text/html; charset=utf-8", MissionJob::htmlReport, "html", download);
+            case "report.json" -> handleReport(exchange, job, "application/json; charset=utf-8", MissionJob::jsonReport, "json", download);
+            case "report.txt" -> handleReport(exchange, job, "text/plain; charset=utf-8", MissionJob::textReport, "txt", download);
+            case "report/redesigned" -> handleReport(exchange, job, "text/html; charset=utf-8", MissionJob::redesignedHtmlReport, "html", download);
             default -> HandlerSupport.sendText(exchange, 404, "Not Found");
         }
     }
 
+    /**
+     * Polled every ~1.5-2s by {@code LiveMissionStreamView}'s client-side
+     * JS while a mission is RUNNING — {@code id}/{@code state}/{@code
+     * status} keep their original shape exactly (existing consumers are
+     * unaffected); {@code iteration}/{@code maxIterations}/{@code
+     * elapsedSeconds}/{@code events} are new. The full event list is sent
+     * every poll rather than a {@code ?since=} cursor — a whole mission
+     * caps out around {@code maxIterations() * 3} events, small enough
+     * that the client just tracks how many it's already rendered and
+     * appends the new tail itself.
+     */
     private void handleStatusJson(HttpExchange exchange, MissionJob job) throws IOException {
 
-        String json = "{\"id\":\"" + job.id() + "\",\"state\":\"" + job.state()
-                + (job.state() == MissionJob.State.DONE ? "\",\"status\":\"" + job.report().status() + "\"" : "\"")
+        List<MissionStreamEvent> events = job.events();
+
+        StringBuilder eventsJson = new StringBuilder("[");
+        for (int i = 0; i < events.size(); i++) {
+            MissionStreamEvent event = events.get(i);
+            if (i > 0) {
+                eventsJson.append(',');
+            }
+            eventsJson.append("{\"kind\":\"").append(event.kind())
+                    .append("\",\"headline\":\"").append(HandlerSupport.escapeJson(event.headline()))
+                    .append("\",\"detail\":\"").append(HandlerSupport.escapeJson(event.detail()))
+                    .append("\",\"timestamp\":\"").append(event.timestamp())
+                    .append("\"}");
+        }
+        eventsJson.append(']');
+
+        String json = "{\"id\":\"" + job.id() + "\",\"state\":\"" + job.state() + "\""
+                + ",\"iteration\":" + job.iteration()
+                + ",\"maxIterations\":" + job.maxIterations()
+                + ",\"elapsedSeconds\":" + job.elapsedSeconds()
+                + ",\"events\":" + eventsJson
+                + (job.state() == MissionJob.State.DONE ? ",\"status\":\"" + job.summary().status() + "\"" : "")
                 + "}";
 
         HandlerSupport.sendFile(exchange, 200, "application/json; charset=utf-8", json, null);
@@ -87,28 +116,16 @@ public final class MissionsHandler implements HttpHandler {
 
     private void handleReport(
             HttpExchange exchange, MissionJob job, String contentType,
-            Function<AegisReport, String> extractor, String extension, boolean download) throws IOException {
+            Function<MissionJob, String> extractor, String extension, boolean download) throws IOException {
 
         if (job.state() != MissionJob.State.DONE) {
             HandlerSupport.sendText(exchange, 404, "Report not available — mission has not finished successfully.");
             return;
         }
 
-        String content = extractor.apply(job.report());
+        String content = extractor.apply(job);
         String filename = download ? "aegis-report-" + job.id() + "." + extension : null;
 
         HandlerSupport.sendFile(exchange, 200, contentType, content, filename);
-    }
-
-    /**
-     * Built on demand rather than at mission-run time — {@link AegisReport}
-     * never pre-renders this format. Reuses the exact {@code
-     * MissionReportData} the frozen generator itself was built from
-     * (real screenshots, experiences, and any AI-generated plan/
-     * explanations/recommendations included), so the two reports never
-     * silently diverge.
-     */
-    private static String redesignedHtmlReport(AegisReport report) {
-        return new RedesignedMissionReportGenerator().generate(report.reportData());
     }
 }

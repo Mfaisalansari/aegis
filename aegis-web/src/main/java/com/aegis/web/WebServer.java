@@ -1,15 +1,19 @@
 package com.aegis.web;
 
+import com.aegis.web.handler.CoverageMapHandler;
 import com.aegis.web.handler.DashboardHandler;
 import com.aegis.web.handler.MissionsHandler;
 import com.aegis.web.handler.NaturalLanguageHandler;
 import com.aegis.web.handler.RunHandler;
+import com.aegis.web.handler.RunsHandler;
 import com.aegis.web.mission.MissionExecutor;
+import com.aegis.web.mission.MissionHistoryStore;
 import com.aegis.web.mission.MissionJobStore;
 import com.sun.net.httpserver.HttpServer;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.nio.file.Path;
 import java.util.concurrent.Executors;
 
 /**
@@ -27,10 +31,12 @@ public final class WebServer {
     private final HttpServer server;
     private final MissionExecutor missionExecutor;
 
-    public WebServer(int port, int missionConcurrency) {
+    public WebServer(int port, int missionConcurrency, String historyDirectory) {
 
         MissionJobStore jobStore = new MissionJobStore();
-        this.missionExecutor = new MissionExecutor(missionConcurrency);
+        MissionHistoryStore historyStore = new MissionHistoryStore(Path.of(historyDirectory));
+        historyStore.loadAll().forEach(jobStore::put);
+        this.missionExecutor = new MissionExecutor(missionConcurrency, historyStore);
 
         try {
             this.server = HttpServer.create(new InetSocketAddress(port), 0);
@@ -38,7 +44,9 @@ public final class WebServer {
             throw new RuntimeException("Failed to bind AEGIS Web server to port " + port, e);
         }
 
-        server.createContext("/", new DashboardHandler(jobStore));
+        server.createContext("/", new DashboardHandler(jobStore, missionExecutor));
+        server.createContext("/runs", new RunsHandler(jobStore));
+        server.createContext("/coverage-map", new CoverageMapHandler(jobStore));
         server.createContext("/run", new RunHandler(jobStore, missionExecutor));
         server.createContext("/run/parse", new NaturalLanguageHandler());
         server.createContext("/missions/", new MissionsHandler(jobStore));

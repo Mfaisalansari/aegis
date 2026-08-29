@@ -66,4 +66,32 @@ final class HandlerSupport {
 
         return null;
     }
+
+    /** Minimal JSON string escaping — this module hand-builds JSON, no library, so quotes/control chars need escaping before embedding free text (e.g. a mission's headline/detail). */
+    static String escapeJson(String value) {
+
+        if (value == null) {
+            return "";
+        }
+
+        StringBuilder out = new StringBuilder(value.length());
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            switch (c) {
+                case '"' -> out.append("\\\"");
+                case '\\' -> out.append("\\\\");
+                case '\n' -> out.append("\\n");
+                case '\r' -> out.append("\\r");
+                case '\t' -> out.append("\\t");
+                default -> {
+                    if (c < 0x20) {
+                        out.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        out.append(c);
+                    }
+                }
+            }
+        }
+        return out.toString();
+    }
 }

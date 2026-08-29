@@ -1,17 +1,25 @@
 package com.aegis.reporting;
 
+import com.aegis.core.bug.BugExplainer;
+import com.aegis.core.bug.RecommendationEngine;
+import com.aegis.core.mission.MissionPlan;
 import com.aegis.core.report.MissionReportData;
 import com.aegis.model.action.Action;
 import com.aegis.model.action.ActionType;
 import com.aegis.model.context.MissionContext;
+import com.aegis.model.experience.Experience;
+import com.aegis.model.experience.ExperienceOutcome;
 import com.aegis.model.mission.Mission;
 import com.aegis.model.mission.MissionStatus;
 import com.aegis.model.observation.ElementInfo;
 import com.aegis.model.observation.Observation;
+import com.aegis.model.reasoning.CandidateAction;
+import com.aegis.model.reasoning.ReasoningStep;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -19,6 +27,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -102,6 +111,145 @@ class RedesignedMissionReportGeneratorTest {
         assertTrue(longViewBoxWidth > shortViewBoxWidth,
                 "expected the graph to widen for a long sibling label (short=" + shortViewBoxWidth
                         + ", long=" + longViewBoxWidth + ")");
+    }
+
+    /**
+     * Regression guard for the misleading-"learned"-badge bug: a plain
+     * exploration bonus ({@code HeuristicCandidateConfidenceEstimator}'s
+     * flat +0.05 for a never-tried candidate) must NOT render the
+     * "learned" badge — it isn't a real learned adjustment, just an
+     * incentive to try something new.
+     */
+    @Test
+    void explorationBonusDoesNotRenderALearnedBadge() {
+
+        MissionContext context = twoStateContext();
+        context.getExecutionState().addReasoningStep(reasoningStepWith(
+                "Generic input, no credential match (learning-adjusted +0.05, never tried yet this mission)"));
+
+        String html = generator.generate(MissionReportData.from(context, MissionStatus.SUCCESS));
+
+        assertTrue(html.contains("exploring new ground"), html);
+        assertTrue(!extractReasoningTabHtml(html).contains("learned-badge"),
+                "a flat exploration bonus should never render the learned badge");
+    }
+
+    /** Counterpart: a genuine prior-experience adjustment (a real success/failure rate) should still show "learned". */
+    @Test
+    void genuineLearnedAdjustmentRendersALearnedBadge() {
+
+        MissionContext context = twoStateContext();
+        context.getExecutionState().addReasoningStep(reasoningStepWith("Persistent nav link (learning-adjusted +0.20)"));
+
+        String html = generator.generate(MissionReportData.from(context, MissionStatus.SUCCESS));
+
+        assertTrue(html.contains("learned: tends to work, +0.20"), html);
+        assertTrue(extractReasoningTabHtml(html).contains("learned-badge"),
+                "a genuine learned adjustment should render the learned badge");
+    }
+
+    @Test
+    void learningTabNeverClaimsReliabilityForActionsTriedOnlyOnce() {
+
+        MissionContext context = twoStateContext();
+        Observation obs = observation("https://example.com/login", "Login", "el");
+
+        List<Experience> experiences = List.of(
+                Experience.create(context, obs, candidate("user-name"), ExperienceOutcome.SUCCESS, Duration.ofMillis(10)),
+                Experience.create(context, obs, candidate("password"), ExperienceOutcome.SUCCESS, Duration.ofMillis(10)),
+                Experience.create(context, obs, candidate("login-button"), ExperienceOutcome.SUCCESS, Duration.ofMillis(10)));
+
+        String html = generator.generate(withExperiences(context, experiences));
+        String learningHtml = extractLearningSectionHtml(html);
+
+        assertTrue(learningHtml.contains(">First try<"), learningHtml);
+        assertFalse(learningHtml.contains("improved"), learningHtml);
+        assertTrue(learningHtml.contains("first attempt"), learningHtml);
+        assertTrue(learningHtml.contains(">0<"), "Confirmed Reliable tile should read 0: " + learningHtml);
+    }
+
+    @Test
+    void learningTabShowsConfirmedReliableForAGenuinelyRepeatedAction() {
+
+        MissionContext context = twoStateContext();
+        Observation obs = observation("https://example.com/login", "Login", "el");
+
+        List<Experience> experiences = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            experiences.add(Experience.create(context, obs, candidate("nav-logout"), ExperienceOutcome.SUCCESS, Duration.ofMillis(10)));
+        }
+        experiences.add(Experience.create(context, obs, candidate("one-off"), ExperienceOutcome.SUCCESS, Duration.ofMillis(10)));
+
+        String html = generator.generate(withExperiences(context, experiences));
+        String learningHtml = extractLearningSectionHtml(html);
+
+        assertTrue(learningHtml.contains(">Confirmed reliable<"), learningHtml);
+    }
+
+    @Test
+    void learningTabShowsConfirmedUnreliableForARepeatedFailingAction() {
+
+        MissionContext context = twoStateContext();
+        Observation obs = observation("https://example.com/login", "Login", "el");
+
+        List<Experience> experiences = List.of(
+                Experience.create(context, obs, candidate("flaky-button"), ExperienceOutcome.ERROR, Duration.ofMillis(10)),
+                Experience.create(context, obs, candidate("flaky-button"), ExperienceOutcome.ERROR, Duration.ofMillis(10)),
+                Experience.create(context, obs, candidate("flaky-button"), ExperienceOutcome.SUCCESS, Duration.ofMillis(10)));
+
+        String html = generator.generate(withExperiences(context, experiences));
+        String learningHtml = extractLearningSectionHtml(html);
+
+        assertTrue(learningHtml.contains(">Confirmed unreliable<"), learningHtml);
+    }
+
+    @Test
+    void learningTabTableIsVisibleWithoutExpandingAnything() {
+
+        MissionContext context = twoStateContext();
+        Observation obs = observation("https://example.com/login", "Login", "el");
+
+        List<Experience> experiences = List.of(
+                Experience.create(context, obs, candidate("user-name"), ExperienceOutcome.SUCCESS, Duration.ofMillis(10)));
+
+        String html = generator.generate(withExperiences(context, experiences));
+        String learningHtml = extractLearningSectionHtml(html);
+
+        assertFalse(html.contains("Show the technical breakdown, action by action"), html);
+        assertTrue(learningHtml.contains("<table>"), learningHtml);
+    }
+
+    private String extractLearningSectionHtml(String html) {
+        int start = html.indexOf("<section id=\"learning\">");
+        int end = html.indexOf("<section", start + 1);
+        return html.substring(start, end);
+    }
+
+    private MissionReportData withExperiences(MissionContext context, List<Experience> experiences) {
+        return MissionReportData.from(
+                context, MissionStatus.SUCCESS,
+                (BugExplainer) (cluster, fallback) -> fallback,
+                (RecommendationEngine) (clusters, fallback) -> fallback,
+                new MissionPlan(List.of()),
+                experiences);
+    }
+
+    private CandidateAction candidate(String target) {
+        return new CandidateAction(click(target), 0.8, "test");
+    }
+
+    private String extractReasoningTabHtml(String html) {
+        int start = html.indexOf("data-tab-panel=\"reasoning\"");
+        int end = html.indexOf("data-tab-panel=\"timeline\"");
+        return html.substring(start, end);
+    }
+
+    private ReasoningStep reasoningStepWith(String reasoning) {
+
+        Action action = click("submit-button");
+        CandidateAction candidate = new CandidateAction(action, 0.85, reasoning);
+
+        return new ReasoningStep(1, List.of(candidate), candidate, Instant.now(), "greedy");
     }
 
     private double viewBoxWidth(String html) {
