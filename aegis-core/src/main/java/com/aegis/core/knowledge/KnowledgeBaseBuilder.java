@@ -11,10 +11,11 @@ import java.util.ServiceLoader;
 
 /**
  * Orchestrates a set of {@link KnowledgeProvider}s into a {@link
- * KnowledgeBase}. {@link #standard()} registers the 6 built-in
+ * KnowledgeBase}. {@link #standard()} registers the 8 built-in
  * catalogs, in dependency order (state → node → flow → journey → ux
- * quality → page inspection — each later one reads an earlier one out of
- * the in-progress base). Third parties add their own catalogs via
+ * quality → page inspection → navigation graph → experience score —
+ * each later one reads an earlier one out of the in-progress base).
+ * Third parties add their own catalogs via
  * {@link #withProvider} or by registering a {@code
  * META-INF/services/com.aegis.core.knowledge.KnowledgeProvider} file —
  * same discovery mechanism as Stage 2's plugins.
@@ -30,7 +31,12 @@ public final class KnowledgeBaseBuilder {
                 .withProvider(new FlowCatalogProvider())
                 .withProvider(new JourneyCatalogProvider())
                 .withProvider(new UxAnalysisCatalogProvider())
-                .withProvider(new InspectionCheckProvider());
+                .withProvider(new InspectionCheckProvider())
+                // AEGIS 2.0 Phase 4 — pure rollups of the 6 catalogs above,
+                // appended rather than interleaved so the original 6 stay
+                // in their proven order untouched.
+                .withProvider(new NavigationGraphCatalogProvider())
+                .withProvider(new ExperienceScoreCatalogProvider());
     }
 
     public KnowledgeBaseBuilder withProvider(KnowledgeProvider provider) {

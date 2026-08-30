@@ -2,11 +2,15 @@ package com.aegis.core.mission;
 
 import com.aegis.core.llm.LlmChatClient;
 import com.aegis.core.llm.LlmClientException;
+import com.aegis.core.mission.LlmMissionParser.NaturalLanguageParseResult;
 import com.aegis.model.mission.Mission;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class LlmMissionParserTest {
 
@@ -15,7 +19,8 @@ class LlmMissionParserTest {
 
         LlmMissionParser parser = new LlmMissionParser(stubClient("""
                 {"baseUrl": "https://www.saucedemo.com/", "goal": "Log in and add an item to the cart",
-                 "successUrlContains": "inventory.html", "username": "standard_user", "password": "secret_sauce"}
+                 "successUrlContains": "inventory.html", "username": "standard_user", "password": "secret_sauce",
+                 "maxIterations": 15, "strategy": "coverage-aware", "inputStrategy": "edge-case"}
                 """));
 
         Mission mission = parser.parse("Log into saucedemo with standard_user/secret_sauce and add an item to cart");
@@ -24,6 +29,9 @@ class LlmMissionParserTest {
         assertEquals("inventory.html", mission.parameter("successUrlContains"));
         assertEquals("standard_user", mission.parameter("username"));
         assertEquals("secret_sauce", mission.parameter("password"));
+        assertEquals("15", mission.parameter("maxIterations"));
+        assertEquals("coverage-aware", mission.parameter("strategy"));
+        assertEquals("edge-case", mission.parameter("inputStrategy"));
         assertEquals("Log in and add an item to the cart", mission.name());
     }
 
@@ -32,13 +40,43 @@ class LlmMissionParserTest {
 
         LlmMissionParser parser = new LlmMissionParser(stubClient(
                 "{\"baseUrl\": \"https://example.com\", \"goal\": null, "
-                        + "\"successUrlContains\": null, \"username\": null, \"password\": null}"));
+                        + "\"successUrlContains\": null, \"username\": null, \"password\": null, "
+                        + "\"maxIterations\": null, \"strategy\": null, \"inputStrategy\": null}"));
 
         Mission mission = parser.parse("Go to example.com");
 
         assertEquals("https://example.com", mission.parameter("baseUrl"));
         assertNull(mission.parameter("successUrlContains"));
         assertNull(mission.parameter("username"));
+        assertNull(mission.parameter("maxIterations"));
+        assertNull(mission.parameter("strategy"));
+        assertNull(mission.parameter("inputStrategy"));
+    }
+
+    @Test
+    void passesThroughAnInvalidStrategyNameUnfiltered() {
+
+        // Extraction, not validation, is this class's job — an invalid/hallucinated
+        // value gets the same downstream rejection a human's typo would (MissionRequestMapper).
+        LlmMissionParser parser = new LlmMissionParser(stubClient(
+                "{\"baseUrl\": \"https://example.com\", \"strategy\": \"make-it-up\"}"));
+
+        Mission mission = parser.parse("Go to example.com");
+
+        assertEquals("make-it-up", mission.parameter("strategy"));
+    }
+
+    @Test
+    void parseWithDiagnosticsReportsAiUsedTrueOnTheHappyPath() {
+
+        LlmMissionParser parser = new LlmMissionParser(stubClient(
+                "{\"baseUrl\": \"https://example.com\", \"goal\": \"test\"}"));
+
+        NaturalLanguageParseResult result = parser.parseWithDiagnostics("Go to example.com");
+
+        assertTrue(result.aiUsed());
+        assertNull(result.fallbackReason());
+        assertEquals("https://example.com", result.mission().parameter("baseUrl"));
     }
 
     @Test
@@ -63,6 +101,10 @@ class LlmMissionParserTest {
         // Falls all the way through to RuleBasedMissionParser, which
         // extracts the URL directly from the raw instruction instead.
         assertEquals("https://www.saucedemo.com/", mission.parameter("baseUrl"));
+
+        NaturalLanguageParseResult result = parser.parseWithDiagnostics("Log into https://www.saucedemo.com/ and add an item");
+        assertFalse(result.aiUsed());
+        assertNotNull(result.fallbackReason());
     }
 
     @Test
@@ -74,6 +116,10 @@ class LlmMissionParserTest {
         Mission mission = parser.parse("Log into https://www.saucedemo.com/ and add an item");
 
         assertEquals("https://www.saucedemo.com/", mission.parameter("baseUrl"));
+
+        NaturalLanguageParseResult result = parser.parseWithDiagnostics("Log into https://www.saucedemo.com/ and add an item");
+        assertFalse(result.aiUsed());
+        assertNotNull(result.fallbackReason());
     }
 
     @Test
@@ -86,6 +132,10 @@ class LlmMissionParserTest {
         Mission mission = parser.parse("Log into https://www.saucedemo.com/ and add an item");
 
         assertEquals("https://www.saucedemo.com/", mission.parameter("baseUrl"));
+
+        NaturalLanguageParseResult result = parser.parseWithDiagnostics("Log into https://www.saucedemo.com/ and add an item");
+        assertFalse(result.aiUsed());
+        assertNotNull(result.fallbackReason());
     }
 
     @Test
@@ -96,6 +146,10 @@ class LlmMissionParserTest {
         Mission mission = parser.parse("Log into https://www.saucedemo.com/ and add an item");
 
         assertEquals("https://www.saucedemo.com/", mission.parameter("baseUrl"));
+
+        NaturalLanguageParseResult result = parser.parseWithDiagnostics("Log into https://www.saucedemo.com/ and add an item");
+        assertFalse(result.aiUsed());
+        assertNotNull(result.fallbackReason());
     }
 
     private LlmChatClient stubClient(String response) {

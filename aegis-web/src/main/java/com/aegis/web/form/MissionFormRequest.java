@@ -77,11 +77,16 @@ public record MissionFormRequest(
     }
 
     /**
-     * Maps a {@code MissionParser} result onto form fields for review before it runs. Only
-     * {@code baseUrl}/{@code username}/{@code password}/{@code successUrlContains} ever come
-     * from the parser (both {@code RuleBasedMissionParser} and {@code LlmMissionParser} only
-     * ever populate those four parameter keys) — everything else (strategy, browser, iteration
-     * limits, inspection settings) stays at the same defaults a blank form would have.
+     * Maps a {@code MissionParser} result onto form fields for review before it runs.
+     * {@code baseUrl}/{@code username}/{@code password}/{@code successUrlContains} come from the
+     * parser when present, else stay blank (they're genuinely optional free text with no sensible
+     * default). {@code maxIterations}/{@code strategy}/{@code inputStrategy} also come from the
+     * parser when {@code LlmMissionParser} managed to extract them (e.g. "explore for 20 steps",
+     * "using the coverage-aware strategy", "test with invalid input") — but unlike the four above,
+     * fall back to the same blank-form default rather than empty when absent, since an empty value
+     * in a strategy dropdown or the iteration-count field is worse UX than keeping today's default.
+     * Everything else (browser, inspection settings) stays at the same defaults a blank form would
+     * have — {@code LlmMissionParser} has no way to extract those today.
      */
     public static MissionFormRequest fromParsedMission(Mission mission, String instruction) {
 
@@ -96,9 +101,9 @@ public record MissionFormRequest(
                 orEmpty(mission.parameter("successUrlContains")),
                 blank.browserType(),
                 blank.headless(),
-                blank.strategy(),
-                blank.maxIterations(),
-                blank.inputStrategy(),
+                blankToDefault(mission.parameter("strategy"), blank.strategy()),
+                blankToDefault(mission.parameter("maxIterations"), blank.maxIterations()),
+                blankToDefault(mission.parameter("inputStrategy"), blank.inputStrategy()),
                 blank.interruptions(),
                 blank.doubleClicks(),
                 blank.raceConditions(),

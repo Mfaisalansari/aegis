@@ -257,10 +257,18 @@ public final class MissionFormView {
         field.append("<div><label for=\"").append(name).append("\">").append(escapeHtml(label)).append("</label>");
         field.append("<select id=\"").append(name).append("\" name=\"").append(name).append("\">");
 
+        boolean matchesKnownOption = false;
+
         for (String option : options) {
             boolean isSelected = option.equalsIgnoreCase(selected);
-            field.append("<option value=\"").append(option).append("\"").append(isSelected ? " selected" : "").append(">")
-                    .append(option).append("</option>");
+            matchesKnownOption |= isSelected;
+            field.append("<option value=\"").append(escapeHtml(option)).append("\"").append(isSelected ? " selected" : "").append(">")
+                    .append(escapeHtml(option)).append("</option>");
+        }
+
+        if (selected != null && !selected.isBlank() && !matchesKnownOption) {
+            field.append("<option value=\"").append(escapeHtml(selected)).append("\" selected>")
+                    .append(escapeHtml(selected)).append("</option>");
         }
 
         field.append("</select>");

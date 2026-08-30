@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class KnowledgeBaseBuilderTest {
 
     @Test
-    void standardBuildsAllSixBuiltInCatalogsInDependencyOrder() {
+    void standardBuildsAllEightBuiltInCatalogsInDependencyOrder() {
 
         List<Observation> observations = List.of(observation("https://app/login", "Login", "a"));
 
@@ -24,6 +24,8 @@ class KnowledgeBaseBuilderTest {
         assertTrue(base.get(JourneyCatalog.class).isPresent());
         assertTrue(base.get(UxFindingCatalog.class).isPresent());
         assertTrue(base.get(InspectionCatalog.class).isPresent());
+        assertTrue(base.get(NavigationGraphCatalog.class).isPresent());
+        assertTrue(base.get(ExperienceScoreCatalog.class).isPresent());
         assertEquals(1, base.require(StateCatalog.class).states().size());
     }
 

@@ -3,7 +3,9 @@ package com.aegis.core.knowledge;
 import com.aegis.model.observation.ElementInfo;
 import com.aegis.model.observation.Observation;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -90,5 +92,36 @@ class KnowledgeBaseTextRendererTest {
 
         assertTrue(rendered.contains("UX Quality"));
         assertTrue(rendered.contains("BACKTRACKING"));
+        assertTrue(rendered.contains("Navigation Graph"));
+        assertTrue(rendered.contains("login → dashboard → login"));
+        assertTrue(rendered.contains("Experience Score"));
+        assertTrue(rendered.contains("/ 100"));
+    }
+
+    @Test
+    void omitsTheTestIntelligenceSectionWhenItWasNeverAddedToTheChain() {
+
+        KnowledgeBase base = KnowledgeBaseBuilder.standard()
+                .build("App", List.of(observation("https://app/login", "Login", "a")), List.of(), KnowledgeConfig.empty());
+
+        String rendered = renderer.render("App", base);
+
+        assertTrue(!rendered.contains("Test Intelligence"));
+    }
+
+    @Test
+    void rendersTestIntelligenceRecommendationsWhenTheProviderWasExplicitlyAdded(@TempDir Path tempDir) {
+
+        CoverageStore store = new CoverageStore(tempDir);
+        store.merge("App", java.util.Set.of("checkout"));
+
+        KnowledgeBase base = KnowledgeBaseBuilder.standard()
+                .withProvider(new TestIntelligenceCatalogProvider(store))
+                .build("App", List.of(observation("https://app/login", "Login", "a")), List.of(), KnowledgeConfig.empty());
+
+        String rendered = renderer.render("App", base);
+
+        assertTrue(rendered.contains("Test Intelligence"));
+        assertTrue(rendered.contains("checkout"));
     }
 }

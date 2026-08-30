@@ -21,6 +21,8 @@ public final class KnowledgeBaseTextRenderer {
         JourneyCatalog journeyCatalog = knowledgeBase.require(JourneyCatalog.class);
         UxFindingCatalog uxFindingCatalog = knowledgeBase.require(UxFindingCatalog.class);
         InspectionCatalog inspectionCatalog = knowledgeBase.require(InspectionCatalog.class);
+        NavigationGraphCatalog navigationGraphCatalog = knowledgeBase.require(NavigationGraphCatalog.class);
+        ExperienceScoreCatalog experienceScoreCatalog = knowledgeBase.require(ExperienceScoreCatalog.class);
 
         StringBuilder out = new StringBuilder();
 
@@ -87,6 +89,38 @@ public final class KnowledgeBaseTextRenderer {
             out.append(finding.type()).append(" [").append(finding.severity()).append("] ")
                     .append(finding.summary()).append(" (evidence: ").append(finding.evidence()).append(")\n");
         }
+        out.append('\n');
+
+        out.append("Navigation Graph\n").append(RULE).append('\n');
+        out.append("Transitions: ").append(navigationGraphCatalog.edges().size()).append('\n');
+        for (NavigationGraphEdge edge : navigationGraphCatalog.edges()) {
+            out.append("  ").append(edge.fromNodeKey()).append(" → ").append(edge.toNodeKey())
+                    .append(" (x").append(edge.traversalCount()).append(")\n");
+        }
+        out.append("Loops walked: ").append(navigationGraphCatalog.loops().size()).append('\n');
+        for (NavigationLoop loop : navigationGraphCatalog.loops()) {
+            out.append("  ").append(String.join(" → ", loop.nodeKeySequence())).append('\n');
+        }
+        out.append("Dead ends: ");
+        out.append(navigationGraphCatalog.deadEndNodeKeys().isEmpty()
+                ? "(none)" : String.join(", ", navigationGraphCatalog.deadEndNodeKeys()));
+        out.append('\n');
+        out.append('\n');
+
+        out.append("Experience Score\n").append(RULE).append('\n');
+        out.append(experienceScoreCatalog.score()).append(" / 100");
+        out.append(" (").append(experienceScoreCatalog.totalFindings()).append(" finding(s), ")
+                .append(experienceScoreCatalog.frictionPoints()).append(" friction point(s))\n");
+
+        // Opt-in (see TestIntelligenceCatalog's own Javadoc for why it's
+        // not always present) — rendered only when a caller added it.
+        knowledgeBase.get(TestIntelligenceCatalog.class).ifPresent(testIntelligence -> {
+            out.append('\n');
+            out.append("Test Intelligence\n").append(RULE).append('\n');
+            for (String recommendation : testIntelligence.recommendations()) {
+                out.append("- ").append(recommendation).append('\n');
+            }
+        });
 
         return out.toString();
     }

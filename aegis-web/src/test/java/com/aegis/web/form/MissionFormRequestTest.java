@@ -16,7 +16,8 @@ class MissionFormRequestTest {
 
         Mission mission = new Mission(UUID.randomUUID(), "Log into the demo shop", "raw instruction",
                 Map.of("baseUrl", "https://example.com/", "username", "demo", "password", "demo123",
-                        "successUrlContains", "dashboard"));
+                        "successUrlContains", "dashboard", "maxIterations", "15",
+                        "strategy", "coverage-aware", "inputStrategy", "edge-case"));
 
         MissionFormRequest form = MissionFormRequest.fromParsedMission(mission, "raw instruction");
 
@@ -26,6 +27,9 @@ class MissionFormRequestTest {
         assertEquals("demo", form.username());
         assertEquals("demo123", form.password());
         assertEquals("dashboard", form.successUrlContains());
+        assertEquals("15", form.maxIterations());
+        assertEquals("coverage-aware", form.strategy());
+        assertEquals("edge-case", form.inputStrategy());
         assertEquals("raw instruction", form.instruction());
     }
 
