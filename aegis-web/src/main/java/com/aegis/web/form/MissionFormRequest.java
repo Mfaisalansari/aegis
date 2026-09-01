@@ -20,6 +20,8 @@ public record MissionFormRequest(
         String username,
         String password,
         String successUrlContains,
+        String requiredActionsContain,
+        String undoActionsContain,
         String browserType,
         boolean headless,
         String strategy,
@@ -42,7 +44,7 @@ public record MissionFormRequest(
     public static MissionFormRequest defaults() {
         return new MissionFormRequest(
                 "AEGIS Mission", "Autonomous exploration",
-                "", "", "", "",
+                "", "", "", "", "", "",
                 "chromium", false,
                 "greedy", "10", "realistic", false, false, false,
                 "reports",
@@ -58,6 +60,8 @@ public record MissionFormRequest(
                 string(values, "username"),
                 string(values, "password"),
                 string(values, "successUrlContains"),
+                string(values, "requiredActionsContain"),
+                string(values, "undoActionsContain"),
                 string(values, "browserType"),
                 checkbox(values, "headless"),
                 string(values, "strategy"),
@@ -78,12 +82,16 @@ public record MissionFormRequest(
 
     /**
      * Maps a {@code MissionParser} result onto form fields for review before it runs.
-     * {@code baseUrl}/{@code username}/{@code password}/{@code successUrlContains} come from the
-     * parser when present, else stay blank (they're genuinely optional free text with no sensible
-     * default). {@code maxIterations}/{@code strategy}/{@code inputStrategy} also come from the
-     * parser when {@code LlmMissionParser} managed to extract them (e.g. "explore for 20 steps",
-     * "using the coverage-aware strategy", "test with invalid input") — but unlike the four above,
-     * fall back to the same blank-form default rather than empty when absent, since an empty value
+     * {@code baseUrl}/{@code username}/{@code password}/{@code successUrlContains}/
+     * {@code requiredActionsContain}/{@code undoActionsContain} come from the parser when present,
+     * else stay blank (they're genuinely optional free text with no sensible default —
+     * {@code LlmMissionParser} only extracts {@code requiredActionsContain}/{@code undoActionsContain}
+     * when the instruction clearly implies a specific business action and its undo,
+     * e.g. "add an item to the cart without removing it"). {@code maxIterations}/
+     * {@code strategy}/{@code inputStrategy} also come from the parser when {@code LlmMissionParser}
+     * managed to extract them (e.g. "explore for 20 steps", "using the coverage-aware strategy",
+     * "test with invalid input") — but unlike the six above, fall back to the same blank-form
+     * default rather than empty when absent, since an empty value
      * in a strategy dropdown or the iteration-count field is worse UX than keeping today's default.
      * Everything else (browser, inspection settings) stays at the same defaults a blank form would
      * have — {@code LlmMissionParser} has no way to extract those today.
@@ -99,6 +107,8 @@ public record MissionFormRequest(
                 orEmpty(mission.parameter("username")),
                 orEmpty(mission.parameter("password")),
                 orEmpty(mission.parameter("successUrlContains")),
+                orEmpty(mission.parameter("requiredActionsContain")),
+                orEmpty(mission.parameter("undoActionsContain")),
                 blank.browserType(),
                 blank.headless(),
                 blankToDefault(mission.parameter("strategy"), blank.strategy()),

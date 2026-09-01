@@ -9,6 +9,8 @@ public final class HelpText {
     public static final String BASE_URL = "Where the mission starts navigating. Required.";
     public static final String CREDENTIALS = "Filled into login-shaped fields. Without these, generic placeholder values are used instead — fine for exploration, but a real login almost certainly needs the actual credentials.";
     public static final String SUCCESS_URL_CONTAINS = "The mission succeeds the moment the current URL contains this substring. Leave unset and the mission always runs out its Max Iterations without resolving.";
+    public static final String REQUIRED_ACTIONS_CONTAIN = "Optional, comma-separated. The URL match above only counts as SUCCESS once an action targeting each of these substrings has also been executed — e.g. \"add-to-cart\" stops a shortcut like checking out an empty cart from counting as success. Leave unset to require only the URL match.";
+    public static final String UNDO_ACTIONS_CONTAIN = "Optional, comma-separated. If the agent later executes an action matching one of these substrings after a required action above, that requirement is treated as undone (e.g. \"remove\" catches an add-to-cart being immediately reversed) — SUCCESS then needs the required action to happen again after the undo. Leave unset to only check that each required action happened at some point, regardless of what happened afterward.";
     public static final String BROWSER_TYPE = "chromium, firefox, or webkit.";
     public static final String HEADLESS = "Run without a visible browser window.";
     public static final String MAX_ITERATIONS = "Step cap before the mission ends. Default 10.";

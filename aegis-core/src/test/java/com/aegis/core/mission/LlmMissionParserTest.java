@@ -36,12 +36,30 @@ class LlmMissionParserTest {
     }
 
     @Test
+    void extractsRequiredAndUndoActionsWhenTheInstructionImpliesThem() {
+
+        LlmMissionParser parser = new LlmMissionParser(stubClient("""
+                {"baseUrl": "https://www.saucedemo.com/", "goal": "Add an item to the cart and check out",
+                 "successUrlContains": "checkout-complete", "username": "standard_user", "password": "secret_sauce",
+                 "requiredActionsContain": "add-to-cart", "undoActionsContain": "remove"}
+                """));
+
+        Mission mission = parser.parse(
+                "Log into saucedemo.com as standard_user/secret_sauce, add an item to the cart "
+                        + "without removing it, and complete checkout");
+
+        assertEquals("add-to-cart", mission.parameter("requiredActionsContain"));
+        assertEquals("remove", mission.parameter("undoActionsContain"));
+    }
+
+    @Test
     void omitsParametersTheModelReturnedAsNull() {
 
         LlmMissionParser parser = new LlmMissionParser(stubClient(
                 "{\"baseUrl\": \"https://example.com\", \"goal\": null, "
                         + "\"successUrlContains\": null, \"username\": null, \"password\": null, "
-                        + "\"maxIterations\": null, \"strategy\": null, \"inputStrategy\": null}"));
+                        + "\"maxIterations\": null, \"strategy\": null, \"inputStrategy\": null, "
+                        + "\"requiredActionsContain\": null, \"undoActionsContain\": null}"));
 
         Mission mission = parser.parse("Go to example.com");
 
@@ -51,6 +69,8 @@ class LlmMissionParserTest {
         assertNull(mission.parameter("maxIterations"));
         assertNull(mission.parameter("strategy"));
         assertNull(mission.parameter("inputStrategy"));
+        assertNull(mission.parameter("requiredActionsContain"));
+        assertNull(mission.parameter("undoActionsContain"));
     }
 
     @Test

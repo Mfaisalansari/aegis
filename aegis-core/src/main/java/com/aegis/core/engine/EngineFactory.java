@@ -408,7 +408,8 @@ public final class EngineFactory {
                                 new AlreadyExecutedCandidateFilter(memory),
                                 new AlreadyFilledInputCandidateFilter(),
                                 new KnownDeadEndCandidateFilter(worldModel, visitedStateMemory)
-                        )
+                        ),
+                        memory
                 );
 
         /*

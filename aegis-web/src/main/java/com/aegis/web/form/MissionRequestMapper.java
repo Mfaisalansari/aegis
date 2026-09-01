@@ -57,6 +57,8 @@ public final class MissionRequestMapper {
                 .baseUrl(request.baseUrl())
                 .credentials(nullIfBlank(request.username()), nullIfBlank(request.password()))
                 .successWhenUrlContains(nullIfBlank(request.successUrlContains()))
+                .parameter("requiredActionsContain", nullIfBlank(request.requiredActionsContain()))
+                .parameter("undoActionsContain", nullIfBlank(request.undoActionsContain()))
                 .interruptions(request.interruptions())
                 .doubleClicks(request.doubleClicks())
                 .raceConditions(request.raceConditions());

@@ -18,8 +18,8 @@ import java.util.regex.Pattern;
  * Phase 8 "Natural language missions", the AI-backed path: asks a real
  * model to extract structured mission fields (starting URL, goal,
  * success condition, credentials, iteration count, exploration/input
- * strategy) from free-text QA instructions — things RuleBasedMissionParser
- * can't do beyond finding a bare URL.
+ * strategy, required/undo business actions) from free-text QA instructions
+ * — things RuleBasedMissionParser can't do beyond finding a bare URL.
  *
  * Same validation discipline as LlmActionScorer: the model's own
  * "baseUrl" is never trusted blindly — it must parse as a real
@@ -134,6 +134,8 @@ public class LlmMissionParser implements MissionParser {
         putIfPresent(parameters, "successUrlContains", textOrNull(json, "successUrlContains"));
         putIfPresent(parameters, "username", textOrNull(json, "username"));
         putIfPresent(parameters, "password", textOrNull(json, "password"));
+        putIfPresent(parameters, "requiredActionsContain", textOrNull(json, "requiredActionsContain"));
+        putIfPresent(parameters, "undoActionsContain", textOrNull(json, "undoActionsContain"));
 
         Integer maxIterations = intOrNull(json, "maxIterations");
         putIfPresent(parameters, "maxIterations", maxIterations == null ? null : String.valueOf(maxIterations));
@@ -206,12 +208,22 @@ public class LlmMissionParser implements MissionParser {
                 + "otherwise null), and an optional input strategy: \"edge-case\" if the instruction asks for "
                 + "invalid/malformed/adversarial input testing, \"realistic\" if it asks for normal valid data, "
                 + "otherwise null. "
+                + "Also extract, only when the instruction clearly implies them: requiredActionsContain — a "
+                + "comma-separated list of distinctive substrings (e.g. element ids or labels like \"add-to-cart\") "
+                + "that must actually be clicked/performed for the goal to count as genuinely done, used when the "
+                + "instruction names a specific business action the mission must really perform (not just reach a "
+                + "URL that happens to match) — otherwise null; and undoActionsContain — a comma-separated list of "
+                + "substrings identifying actions that would reverse a required action (e.g. \"remove\" undoing "
+                + "\"add-to-cart\"), used when the instruction implies the required action must still hold at the "
+                + "end (e.g. \"without removing it\", \"and keep it in the cart\") — otherwise null. "
                 + "Respond with ONLY a JSON object of the exact shape "
                 + "{\"baseUrl\": \"<url or null>\", \"goal\": \"<short description or null>\", "
                 + "\"successUrlContains\": \"<substring or null>\", \"username\": \"<value or null>\", "
                 + "\"password\": \"<value or null>\", \"maxIterations\": <integer or null>, "
                 + "\"strategy\": \"<one of the strategies above or null>\", "
-                + "\"inputStrategy\": \"<realistic, edge-case, or null>\"} — no markdown, no code fences, no other text. "
-                + "If you cannot find a URL in the instruction, set baseUrl to null.";
+                + "\"inputStrategy\": \"<realistic, edge-case, or null>\", "
+                + "\"requiredActionsContain\": \"<comma-separated substrings or null>\", "
+                + "\"undoActionsContain\": \"<comma-separated substrings or null>\"} — no markdown, no code fences, "
+                + "no other text. If you cannot find a URL in the instruction, set baseUrl to null.";
     }
 }

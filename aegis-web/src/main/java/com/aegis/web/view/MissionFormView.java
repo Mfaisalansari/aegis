@@ -53,6 +53,8 @@ public final class MissionFormView {
         body.append("<section class=\"card\">");
         body.append(textField("baseUrl", "Base URL", form.baseUrl(), "https://example.com/", HelpText.BASE_URL));
         body.append(textField("successUrlContains", "Success When URL Contains", form.successUrlContains(), "e.g. inventory.html", HelpText.SUCCESS_URL_CONTAINS));
+        body.append(textField("requiredActionsContain", "Required Actions (comma-separated)", form.requiredActionsContain(), "e.g. add-to-cart", HelpText.REQUIRED_ACTIONS_CONTAIN));
+        body.append(textField("undoActionsContain", "Undo Actions (comma-separated)", form.undoActionsContain(), "e.g. remove", HelpText.UNDO_ACTIONS_CONTAIN));
         body.append(selectField("strategy", "Exploration Strategy", form.strategy(), strategyKeys(), null));
         body.append(strategyHelp(form.strategy()));
         body.append("</section>");
